@@ -7,5 +7,7 @@
     stdlib
   ]},
   {mod, {eproxy_app, []}},
-  {env, []}
+  {env, [
+%%     {server_port, 1080}
+  ]}
 ]}.

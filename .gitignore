@@ -1,6 +1,9 @@
 .idea
 *.iml
 
+log
+*.so
+.*.swp
 ebin
 .eunit
 deps

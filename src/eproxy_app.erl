@@ -1,5 +1,5 @@
--author(alex_burkov).
 -module(eproxy_app).
+-author(alex_burkov).
 -behaviour(application).
 
 -export([
