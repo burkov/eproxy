@@ -5,7 +5,7 @@
 
 -export([
   get_server_port_number/0,
-  select_acceptable_auth_method/1,
+  get_auth_methods/0,
   start_link/0,
   init/1,
   handle_call/3,
@@ -15,20 +15,22 @@
   code_change/3
 ]).
 
--define(SERVER, ?MODULE).
+-include("eproxy.hrl").
 
--type auth_method() :: no_auth | gssapi | password | iana | private.
+-define(SERVER, ?MODULE).
 
 -record(state, {
   port_number :: inet:port_number(),
   auth_methods = [no_auth] :: [auth_method()]
 }).
 
+-spec get_server_port_number() -> inet:port_number().
 get_server_port_number() ->
   gen_server:call(?SERVER, get_server_port_number).
 
-select_acceptable_auth_method(Methods) ->
-  gen_server:call(?SERVER, {select_acceptable_auth_method, Methods}).
+-spec get_auth_methods() -> sets:set(auth_method()).
+get_auth_methods() ->
+  gen_server:call(?SERVER, get_auth_methods).
 
 %%%
 
@@ -42,9 +44,8 @@ init([]) ->
 handle_call(get_server_port_number, _From, State) ->
   {reply, State#state.port_number, State};
 
-handle_call({select_acceptable_auth_method, Methods}, _From, State) ->
-  %% FIXME
-  {reply, {ok, no_auth}, State};
+handle_call(get_auth_methods, _From, State) ->
+  {reply, sets:from_list([no_auth]), State};
 
 handle_call(Request, _From, State) ->
   lager:warning("unexpected call ~p", [Request]),
