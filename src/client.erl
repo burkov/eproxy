@@ -20,6 +20,7 @@
   slave/2
 ]).
 
+-define(RESERVED, 16#00).
 -define(VERSION_SOCKS5, 5).
 -define(NO_ACCEPTABLE_MATHODS, 16#ff).
 -define(RECV_TIMEOUT_MS, 1000).
@@ -162,30 +163,58 @@ slave(M, S) ->
         lager:debug("master is down with reason: ~p, exiting", [Reason]),
         exit(normal);
       recv_auth_method_selection ->
-        {ok, <<ProtocolVersion:8, MethodsCount:8>>} = gen_tcp:recv(Socket, 2, ?RECV_TIMEOUT_MS),
-        case ProtocolVersion of
-          ?VERSION_SOCKS5 ->
-            lager:debug("protocol socks5, fetching supported auth methods list (~p items)", [MethodsCount]),
-            {ok, Methods} = gen_tcp:recv(Socket, MethodsCount, ?RECV_TIMEOUT_MS),
-            gen_fsm:send_event(Master, {auth_methods, Methods});
-          Other ->
-            %% silently close socket
-            lager:warning("unsupported protocol version ~p", [Other]),
-            gen_fsm:send_all_state_event(Master, {stop, unsupported_socks_version})
+        try
+          {ok, <<ProtocolVersion:8, MethodsCount:8>>} = gen_tcp:recv(Socket, 2, ?RECV_TIMEOUT_MS),
+          throw_if(ProtocolVersion =/= ?VERSION_SOCKS5, {unsupported_socks_version, ProtocolVersion}),
+          lager:debug("protocol socks5, fetching supported auth methods list (~p items)", [MethodsCount]),
+          {ok, Methods} = gen_tcp:recv(Socket, MethodsCount, ?RECV_TIMEOUT_MS),
+          gen_fsm:send_event(Master, {auth_methods, Methods})
+        catch throw:{Type, Value} ->
+          lager:warning("got ~p (~p)", [Type, Value]),
+          stop(Master, Type)
         end;
       {do_authentication, no_auth} ->
+        %% nothing to do
+        lager:debug("authntication complete (~p)", [no_auth]),
         self() ! recv_request;
       {do_authentication, AuthMethod} ->
         lager:error("unsupported auth method ~p", [AuthMethod]),
         send_method_selection_reject(Socket),
-        gen_fsm:send_all_state_event(Master, {stop, auth_method_not_supported});
+        stop(Master, auth_method_not_supported);
       recv_request ->
-        lager:debug("FIXME: i don't know how to");
+        try
+          {ok, <<ProtocolVersion:8, Command:8, Reserved:8, AType:8>>} = gen_tcp:recv(Socket, 4, ?RECV_TIMEOUT_MS),
+          throw_if(ProtocolVersion =/= ?VERSION_SOCKS5, {unsupported_socks_version, ProtocolVersion}),
+          throw_if(fixme, {unsupported_command, Command}),
+          warn_if(Reserved =/= ?RESERVED, "reserved =/= ~p", [?RESERVED]),
+          throw_if(fixme, {unsupported_atype, AType}),
+          lager:debug("command ~p, address type ~p", [Command, AType]),
+          lager:debug("%%FIXME: implement me")
+        catch throw:{Type, Value} ->
+            lager:warning("got ~p (~p)", [Type, Value]),
+            stop(Master, Type)
+        end;
       Else ->
         lager:warning("unknown command (~p), exiting", [Else])
     end,
     Recur(Master, Socket)
   end(M, S).
+
+
+throw_if(Predicate, Type) ->
+  case Predicate of
+    true -> throw(Type);
+    false -> ok
+  end.
+
+warn_if(Predicate, Format, Args) ->
+  case Predicate of
+    true -> lager:warning(Format, Args);
+    false -> ok
+  end.
+
+stop(Master, Reason) ->
+  gen_fsm:send_all_state_event(Master, {stop, Reason}).
 
 
 
