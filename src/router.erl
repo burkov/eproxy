@@ -16,7 +16,6 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {
-  port_num :: inet:port_number(),
   socket :: gen_tcp:socket()
 }).
 
@@ -24,15 +23,10 @@ start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 init([]) ->
-  case application:get_env(server_port) of
-    {ok, Port} when is_integer(Port), Port > 0, Port =< 16#ffff ->
-      {ok, Socket} = gen_tcp:listen(Port, [binary, {nodelay, true}, {active, false}, {reuseaddr, true}]),
-      self() ! accept,
-      {ok, #state{port_num = Port, socket = Socket}};
-    Else ->
-      lager:error("server_port number is incorrect, got = ~p", [Else]),
-      {stop, bad_config}
-  end.
+  PortNum = config:get_server_port_number(),
+  {ok, Socket} = gen_tcp:listen(PortNum, [binary, {nodelay, true}, {active, false}, {reuseaddr, true}]),
+  self() ! accept,
+  {ok, #state{socket = Socket}}.
 
 handle_call(Request, _From, State) ->
   lager:warning("unexpected call ~p", [Request]),
