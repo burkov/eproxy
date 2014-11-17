@@ -10,6 +10,7 @@
 start_link() -> supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
+  %% rest_for_one - router can crash, but it won't affect already opened socks connections
   {ok, {{rest_for_one, 3, 1}, [
     {client_sup, {client_sup, start_link, []}, permanent, 5000, supervisor, [client_sup]},
     {config,     {config, start_link,     []}, permanent, 5000, worker,     [config]},

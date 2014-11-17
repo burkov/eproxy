@@ -27,6 +27,15 @@
 -define(AUTH_METHOD_NEGOTIATION_TIMEOUT_MS, 2000).
 -define(AUTH_SUBROUTINE_TIMEOUT_MS, 2000).
 
+-define(COMMAND_CONNECT, 1).
+-define(COMMAND_BIND, 2).
+-define(COMMAND_UDP_ASSOCIATE, 3).
+
+-define(ADDRESS_TYPE_IPV4, 1).
+-define(ADDRESS_TYPE_DOMAIN_NAME, 3).
+-define(ADDRESS_TYPE_IPV6, 4).
+
+
 -define(AUTH_METHOD_NO_AUTH, 0).
 -define(AUTH_METHOD_GSSAPI, 1).
 -define(AUTH_METHOD_PASSWORD, 2).
@@ -48,7 +57,9 @@ start_link(Socket) ->
   gen_fsm:start_link(?MODULE, [Socket], []).
 
 init([Socket]) ->
-  lager:debug("client started, socket: ~p", [Socket]),
+  {ok, {Address, Port}} = inet:peername(Socket),
+  lager:debug("client connected, socket: ~p:~p", [inet:ntoa(Address), Port]),
+
   Slave = erlang:spawn(?MODULE, slave, [self(), Socket]),
   Slave ! recv_auth_method_selection,
   {ok, auth_method_selection, #state{socket = Socket, slave = Slave}, ?AUTH_METHOD_NEGOTIATION_TIMEOUT_MS}.
@@ -145,14 +156,6 @@ select_preferred_auth_method(ListOfMethods) ->
     false -> none
   end.
 
--spec auth_method_name(byte()) -> auth_method().
-auth_method_name(?AUTH_METHOD_NO_AUTH) -> no_auth;
-auth_method_name(?AUTH_METHOD_GSSAPI) -> gssapi;
-auth_method_name(?AUTH_METHOD_PASSWORD) -> password;
-auth_method_name(?AUTH_METHOD_NONE) -> none;
-auth_method_name(X) when X >= ?AUTH_METHOD_IANA_RESERVED_LOW, X =< ?AUTH_METHOD_IANA_RESERVED_HIGH -> iana_reserved;
-auth_method_name(_) -> private_methods.
-
 %%% slave actor
 
 slave(M, S) ->
@@ -184,11 +187,13 @@ slave(M, S) ->
       recv_request ->
         try
           {ok, <<ProtocolVersion:8, Command:8, Reserved:8, AType:8>>} = gen_tcp:recv(Socket, 4, ?RECV_TIMEOUT_MS),
+          CommandName = command_name(Command),
+          AddressTypeName = address_type_name(AType),
           throw_if(ProtocolVersion =/= ?VERSION_SOCKS5, {unsupported_socks_version, ProtocolVersion}),
-          throw_if(fixme, {unsupported_command, Command}),
+          throw_if(CommandName =:= invalid_command, {unsupported_command, Command}),
           warn_if(Reserved =/= ?RESERVED, "reserved =/= ~p", [?RESERVED]),
-          throw_if(fixme, {unsupported_atype, AType}),
-          lager:debug("command ~p, address type ~p", [Command, AType]),
+          throw_if(AddressTypeName =:= invalid_address_type, {unsupported_address_type, AType}),
+          lager:debug("got command '~p', fetching address type of '~p'", [CommandName, AddressTypeName]),
           lager:debug("%%FIXME: implement me")
         catch throw:{Type, Value} ->
             lager:warning("got ~p (~p)", [Type, Value]),
@@ -201,6 +206,8 @@ slave(M, S) ->
   end(M, S).
 
 
+%%% helpers
+
 throw_if(Predicate, Type) ->
   case Predicate of
     true -> throw(Type);
@@ -212,6 +219,26 @@ warn_if(Predicate, Format, Args) ->
     true -> lager:warning(Format, Args);
     false -> ok
   end.
+
+-spec auth_method_name(byte()) -> auth_method().
+auth_method_name(?AUTH_METHOD_NO_AUTH) -> no_auth;
+auth_method_name(?AUTH_METHOD_GSSAPI) -> gssapi;
+auth_method_name(?AUTH_METHOD_PASSWORD) -> password;
+auth_method_name(?AUTH_METHOD_NONE) -> none;
+auth_method_name(X) when X >= ?AUTH_METHOD_IANA_RESERVED_LOW, X =< ?AUTH_METHOD_IANA_RESERVED_HIGH -> iana_reserved;
+auth_method_name(_) -> private_methods.
+
+-spec address_type_name(pos_integer()) -> address_type().
+address_type_name(?ADDRESS_TYPE_IPV4) -> ipv4;
+address_type_name(?ADDRESS_TYPE_DOMAIN_NAME) -> domain_name;
+address_type_name(?ADDRESS_TYPE_IPV6) -> ipv6;
+address_type_name(_) -> invalid_address_type.
+
+-spec command_name(pos_integer()) -> command().
+command_name(?COMMAND_CONNECT) -> connect;
+command_name(?COMMAND_BIND) -> bind;
+command_name(?COMMAND_UDP_ASSOCIATE) -> udp_associate;
+command_name(_) -> invalid_command.
 
 stop(Master, Reason) ->
   gen_fsm:send_all_state_event(Master, {stop, Reason}).

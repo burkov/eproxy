@@ -24,7 +24,7 @@ start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 init([]) ->
-  put(owners, []), % FIXME remove, this is for debug only
+  put(owners, []), % FIXME for debug only. see fun print_port_owners_on_change/0
   PortNum = config:get_server_port_number(),
   {ok, Socket} = gen_tcp:listen(PortNum, [
     binary,
@@ -51,13 +51,13 @@ handle_info(accept, #state{socket = Socket} = State) ->
         {ok, Pid} = client_sup:start_client(ClientSocket),
         gen_tcp:controlling_process(ClientSocket, Pid) % erlang will close it if process crashes
       catch Type:Reason ->
-        lager:warning("failed to spawn worker for ~p, got ~p reason: ~p", [ClientSocket, Type, Reason]),
+        lager:warning("failed to spawn worker for ~p, got ~p with reason: ~p", [inet:peername(ClientSocket), Type, Reason]),
         gen_tcp:close(ClientSocket)
       end;
     {error, timeout} ->
-      %% to let this actor receive 'shutdown' from supervisor
-      %% FIXME remove this debug, it is too noisy
-      print_owners_on_change();
+      %% timeout was introduced to let this actor receive 'shutdown' from supervisor
+      %% we can also use this to grab some stats, like opened ports to not let them leak
+      print_port_owners_on_change();
     {error, Reason} ->
       lager:warning("failed to accept incoming TCP connection, reason: ~p", [Reason])
   end,
@@ -74,12 +74,17 @@ terminate(Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
+-spec opened_tcp_ports_owners() -> [pid()].
+%% @doc returns list of all node's TCP socket owners
 opened_tcp_ports_owners() ->
   PortInfos = [erlang:port_info(P) || P <- erlang:ports()],
   TcpPortInfos = [P || P <- PortInfos, proplists:get_value(name, P) =:= "tcp_inet"],
   lists:flatten([proplists:get_value(links, P) || P <- TcpPortInfos]).
 
-print_owners_on_change() ->
+-spec print_port_owners_on_change() -> ok.
+%% @doc will print only changes to last known list of opened TCP sockets owners
+print_port_owners_on_change() ->
+  %% process dictionary used here only for debug purposes
   OldOwners = get(owners),
   Owners = opened_tcp_ports_owners(),
   Count = length(Owners),
@@ -93,7 +98,7 @@ print_owners_on_change() ->
   end.
 
 -spec pp_delta(integer()) -> string().
-%% @doc pretty-printer for non-zero integers' delta
+%% @doc pretty-printer for non-zero integers' delta. adds '+' sign in front of positive deltas.
 pp_delta(0) -> exit(bad_arg);
 pp_delta(X) when X < 0 ->
   io_lib:format("~w", [X]);
