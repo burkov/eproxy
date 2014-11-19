@@ -15,7 +15,7 @@
   code_change/3
 ]).
 
--include("eproxy.hrl").
+-include("socks5.hrl").
 
 -define(SERVER, ?MODULE).
 

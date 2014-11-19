@@ -10,3 +10,4 @@ deps
 erl_crash.dump
 ebin
 .rebar
+*.pcapng
