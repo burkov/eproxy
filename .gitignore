@@ -1,6 +1,8 @@
 .idea
 *.iml
+dante-1.4.1
 
+*.pid
 log
 *.so
 .*.swp

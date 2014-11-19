@@ -1,7 +1,7 @@
 #!/usr/bin/env escript
 %%! -pa ebin
 
--module(testproxy).
+-module(acceptence).
 -compile(export_all).
 
 -define(DEBUG(Format, Args), io:format(Format ++ "~n", Args)).
@@ -10,12 +10,10 @@
 %% -define(DEFAULT_PROXY_ADDRESS, "124.42.127.221:1080").
 -define(DEFAULT_PROXY_ADDRESS, "127.0.0.1:1080").
 
--define(CONNECT_DEST_ADDRESS, {127, 0, 0, 1}).
--define(CONNECT_DEST_PORT, 32320).
-
--define(BIND_FROM_ADDRESS, {192,168,1,189}).
--define(BIND_FROM_PORT, 20).
 -define(WHAT_TO_SEND, <<"hello exante">>).
+
+-define(UASSOC_DEST_ADDRESS, {127,0,0,1}).
+-define(UASSOC_DEST_PORT, 17332).
 
 
 parse_args(AddressPort) ->
@@ -29,9 +27,13 @@ main([]) ->
 main([AddressPort]) when is_list(AddressPort) ->
   {Address, Port} = parse_args(AddressPort),
   ?DEBUG("connecting to ~p", [AddressPort]),
-%%   test_connect(Address, Port).
-  test_bind(Address, Port).
-%%   test_udp_associate(Address, Port).
+%%   test_connect(Address, Port, {0,0,0,0,0,0,0,1}, 17332),
+%%   test_connect(Address, Port, {127,0,0,1}, 17333),
+%%   test_connect(Address, Port, "localhost", 17333),
+%%   test_bind(Address, Port, {127,0,0,1}, 100),
+%%   test_bind(Address, Port, {0,0,0,0,0,0,0,1}, 101),
+%%   test_bind(Address, Port, "localhost", 101).
+  test_udp_associate(Address, Port).
 
 
 negotiate_auth_method(Address, Port) ->
@@ -43,53 +45,69 @@ negotiate_auth_method(Address, Port) ->
   {ok, Expected} = gen_tcp:recv(Socket, byte_size(Expected)),
   Socket.
 
-test_connect(Address, Port) ->
+test_connect(Address, Port, DestAddress, DestPort) ->
   ?DEBUG("=== SOCKS5 CONNECT method test", []),
   Socket = negotiate_auth_method(Address, Port),
+  Master = self(),
   {_, Ref} = erlang:spawn_monitor(fun() ->
-    {ok, ServerSocket} = gen_tcp:listen(?CONNECT_DEST_PORT, [binary, {reuseaddr, true}, {active, false}, {nodelay, true}]),
+    Ipv4Address =
+      case is_list(DestAddress) of
+        false -> DestAddress;
+        true -> {ok, A} = inet:getaddr(DestAddress, inet), A
+      end,
+    {ok, ServerSocket} = gen_tcp:listen(DestPort, [binary, {ip, Ipv4Address}, {reuseaddr, true}, {active, false}, {nodelay, true}]),
+    Master ! proceed,
     {ok, ClientSocket} = gen_tcp:accept(ServerSocket),
     {ok, Res} = gen_tcp:recv(ClientSocket, byte_size(?WHAT_TO_SEND)),
     ?DEBUG("RECVED : SOCKS5 proxy tunnel => ~p", [Res]),
     gen_tcp:close(ClientSocket),
     gen_tcp:close(ServerSocket)
   end),
-  ?DEBUG("SENDING: request, connect: ~p:~p", [inet:ntoa(?CONNECT_DEST_ADDRESS), ?CONNECT_DEST_PORT]),
-  gen_tcp:send(Socket, socks5:request(connect, ?CONNECT_DEST_ADDRESS, ?CONNECT_DEST_PORT)),
-  {ok, Reply} = socks5:recv_reply(Socket),
-  ?DEBUG("RECVED : reply ~p", [Reply]),
+  receive proceed -> ok end,
+  send_request(Socket, connect, DestAddress, DestPort),
   ?DEBUG("SENDING: ~p => SOCKS5 proxy tunnel", [?WHAT_TO_SEND]),
   ok = gen_tcp:send(Socket, ?WHAT_TO_SEND),
-  receive
-    {'DOWN', Ref, process, _Pid, _Reason} -> ok
-  end,
+  receive {'DOWN', Ref, process, _Pid, _Reason} -> ok end,
   ?DEBUG("CONNECT: OK", []).
 
-test_bind(Address, Port) ->
+test_bind(Address, Port, DestAddress, DestPort) ->
   ?DEBUG("=== SOCKS5 BIND method test", []),
   Socket = negotiate_auth_method(Address, Port),
-  ?DEBUG("SENDING: request, bind: ~p:~p", [inet:ntoa(?BIND_FROM_ADDRESS), ?BIND_FROM_PORT]),
-  gen_tcp:send(Socket, socks5:request(bind, ?BIND_FROM_ADDRESS, ?BIND_FROM_PORT)),
-  {ok, Reply} = socks5:recv_reply(Socket),
-  ?DEBUG("RECVED : reply ~p", [Reply]),
-  {succeeded, {_Type, ServerAddress}, ServerPort} = Reply,
-  Slave = erlang:spawn(fun() ->
-    {ok, ClientSocket} = gen_tcp:connect(ServerAddress, ServerPort, [binary, {port, ?BIND_FROM_PORT}, {reuseaddr, true}, {active, false}, {nodelay, true}]),
+  {succeeded, {_Type, ServerAddress}, ServerPort} = send_request(Socket, bind, DestAddress, DestPort),
+  Slave = erlang:spawn_link(fun() ->
+    Ipv4Address =
+      case is_list(DestAddress) of
+        false -> DestAddress;
+        true -> {ok, A} = inet:getaddr(DestAddress, inet), A
+      end,
+    {ok, ClientSocket} = gen_tcp:connect(ServerAddress, ServerPort, [binary, {ip, Ipv4Address}, {port, DestPort}, {reuseaddr, true}, {active, false}, {nodelay, true}]),
     ?DEBUG("SENDING: ~p => SOCKS5 proxy tunnel", [?WHAT_TO_SEND]),
     ok = gen_tcp:send(ClientSocket, ?WHAT_TO_SEND),
-    receive
-      you_can_exit -> ok
-    end,
+    receive proceed -> ok end,
     gen_tcp:close(ClientSocket)
   end),
   {ok, Reply2} = socks5:recv_reply(Socket),
   ?DEBUG("RECVED : reply ~p", [Reply2]),
   {ok, Res} = gen_tcp:recv(Socket, byte_size(?WHAT_TO_SEND)),
-  Slave ! you_can_exit,
+  Slave ! proceed,
   ?DEBUG("RECVED : SOCKS5 proxy tunnel => ~p", [Res]),
   ?DEBUG("BIND   : OK", []).
 
-test_udp_associate(Address, Port) ->
+test_udp_associate(Address, Port, DestAddress, DestPort) ->
   ?DEBUG("=== SOCKS5 UDP ASSOCIATE method test", []),
+  Socket = negotiate_auth_method(Address, Port),
+  Reply = send_request(Socket, udp_associate, ?UASSOC_DEST_ADDRESS, ?UASSOC_DEST_PORT),
   ?DEBUG("U ASSOC: OK", []).
 
+
+send_request(Socket, Type, DestAddr, DestPort) ->
+  Request = socks5:request(Type, DestAddr, DestPort),
+  ?DEBUG("SENDING: request: ~p (~p: ~p:~p)", [Request, Type, pp_address(DestAddr), DestPort]),
+  gen_tcp:send(Socket, Request),
+  {ok, Reply} = socks5:recv_reply(Socket),
+  ?DEBUG("RECVED : reply ~p", [Reply]),
+  Reply.
+
+
+pp_address(A) when is_list(A) -> A;
+pp_address(A) when is_tuple(A) -> inet:ntoa(A).

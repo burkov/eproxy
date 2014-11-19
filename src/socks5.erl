@@ -49,13 +49,13 @@ udp_datagram(FragmentNo, Address, Port, Data) ->
 address_to_binary(Tuple) when is_tuple(Tuple) ->
   case tuple_size(Tuple) of
     4 -> <<?ADDRESS_TYPE_IPV4, (list_to_binary(tuple_to_list(Tuple)))/binary>>;
-    8 -> <<?ADDRESS_TYPE_IPV6, (list_to_binary(tuple_to_list(Tuple)))/binary>>
+    8 -> <<?ADDRESS_TYPE_IPV6, <<<<X:16>> || X <- tuple_to_list(Tuple)>>/binary>>
   end;
 
 address_to_binary(List) when is_list(List) ->
   case length(List) >= 16#ff of
     true -> throw(name_too_long);
-    false -> <<?ADDRESS_TYPE_DOMAIN_NAME, (list_to_binary(List))/binary>>
+    false -> <<?ADDRESS_TYPE_DOMAIN_NAME, (length(List)):8, (list_to_binary(List))/binary>>
   end.
 
 -spec auth_method
@@ -142,8 +142,8 @@ recv_address(Socket, ?ADDRESS_TYPE_IPV4) ->
 
 recv_address(Socket, ?ADDRESS_TYPE_IPV6) ->
   try
-    {ok, A} = gen_tcp:recv(Socket, 8),
-    list_to_tuple(binary_to_list(A))
+    {ok, A} = gen_tcp:recv(Socket, 16),
+    list_to_tuple([X || <<X:16>> <= A])
   catch T:E -> {error, {T, E}}
   end;
 
