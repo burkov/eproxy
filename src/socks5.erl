@@ -13,7 +13,8 @@
   command/1,
   address_type/1,
 
-  recv_reply/1
+  recv_reply/1,
+  recv_udp_datagram/1
 ]).
 
 
@@ -42,7 +43,7 @@ reply(ReplyCode, Address, Port) when is_atom(ReplyCode) ->
 -spec udp_datagram(pos_integer(), inet:ip_address() | string(), inet:port_number(), binary()) -> binary().
 %% @doc wraps UDP datagrap with a header
 udp_datagram(FragmentNo, Address, Port, Data) ->
-  <<?RESERVED, ?RESERVED, FragmentNo:8, (address_to_binary(Address))/binary, Port:16, Data/binary>>.
+  <<?RESERVED:16, FragmentNo:8, (address_to_binary(Address))/binary, Port:16, Data/binary>>.
 
 -spec address_to_binary(inet:ip_address() | string()) -> binary().
 %% @doc converts address of given type into its coded representation
@@ -155,4 +156,26 @@ recv_address(Socket, ?ADDRESS_TYPE_DOMAIN_NAME) ->
   catch T:E -> {error, {T, E}}
   end.
 
+
+%% -spec recv_udp_datagram(gen_tcp:socket()) ->
+%%   {ok, {address_type(), inet:ip_address() | string()}, inet:port_number(), binary()} | {error, Reason :: any()}.
+%% @doc receives socks5 udp datagram from given passive socket. throw-safe.
+recv_udp_datagram(Socket) ->
+  try
+    {ok, {RelayAddress, RelayPort, <<?RESERVED:16, Fragment:8, AType:8, Rest/binary>>}} = gen_udp:recv(Socket, 0),
+
+    case AType of
+      ?ADDRESS_TYPE_DOMAIN_NAME ->
+        <<Len:8, Rest2/binary>> = Rest,
+        <<Name:Len, Port:16, OriginalData/binary>> = Rest2,
+        {ok, {RelayAddress, RelayPort}, {Name, Port}, Fragment, OriginalData};
+      ?ADDRESS_TYPE_IPV4 ->
+        <<IPv4Addr:32, Port:16, OriginalData/binary>> = Rest,
+        {ok, {RelayAddress, RelayPort}, {IPv4Addr, Port}, Fragment, OriginalData};
+      ?ADDRESS_TYPE_IPV6 ->
+        <<IPv6Addr:(8*16), Port:16, OriginalData/binary>> = Rest,
+        {ok, {RelayAddress, RelayPort}, {IPv6Addr, Port}, Fragment, OriginalData}
+    end
+  catch T:E -> {error, {T, E}}
+  end.
 

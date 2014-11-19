@@ -12,9 +12,6 @@
 
 -define(WHAT_TO_SEND, <<"hello exante">>).
 
--define(UASSOC_DEST_ADDRESS, {127,0,0,1}).
--define(UASSOC_DEST_PORT, 17332).
-
 
 parse_args(AddressPort) ->
   [A, Port] = string:tokens(AddressPort, ":"),
@@ -33,7 +30,7 @@ main([AddressPort]) when is_list(AddressPort) ->
 %%   test_bind(Address, Port, {127,0,0,1}, 100),
 %%   test_bind(Address, Port, {0,0,0,0,0,0,0,1}, 101),
 %%   test_bind(Address, Port, "localhost", 101).
-  test_udp_associate(Address, Port).
+  test_udp_associate(Address, Port, {127, 0, 0, 1}, 17334).
 
 
 negotiate_auth_method(Address, Port) ->
@@ -64,7 +61,7 @@ test_connect(Address, Port, DestAddress, DestPort) ->
     gen_tcp:close(ServerSocket)
   end),
   receive proceed -> ok end,
-  send_request(Socket, connect, DestAddress, DestPort),
+  {succeeded, _, _} = send_request(Socket, connect, DestAddress, DestPort),
   ?DEBUG("SENDING: ~p => SOCKS5 proxy tunnel", [?WHAT_TO_SEND]),
   ok = gen_tcp:send(Socket, ?WHAT_TO_SEND),
   receive {'DOWN', Ref, process, _Pid, _Reason} -> ok end,
@@ -86,7 +83,7 @@ test_bind(Address, Port, DestAddress, DestPort) ->
     receive proceed -> ok end,
     gen_tcp:close(ClientSocket)
   end),
-  {ok, Reply2} = socks5:recv_reply(Socket),
+  {ok, {succeeded, _, _} = Reply2} = socks5:recv_reply(Socket),
   ?DEBUG("RECVED : reply ~p", [Reply2]),
   {ok, Res} = gen_tcp:recv(Socket, byte_size(?WHAT_TO_SEND)),
   Slave ! proceed,
@@ -96,7 +93,22 @@ test_bind(Address, Port, DestAddress, DestPort) ->
 test_udp_associate(Address, Port, DestAddress, DestPort) ->
   ?DEBUG("=== SOCKS5 UDP ASSOCIATE method test", []),
   Socket = negotiate_auth_method(Address, Port),
-  Reply = send_request(Socket, udp_associate, ?UASSOC_DEST_ADDRESS, ?UASSOC_DEST_PORT),
+  {succeeded, {_, RelayAddress}, RelayPort} = send_request(Socket, udp_associate, {0, 0, 0, 0}, 0),
+  Master = self(),
+  erlang:spawn_link(fun() ->
+    {ok, ServerSocket} = gen_udp:open(DestPort + 42, [binary, {ip, DestAddress}, {reuseaddr, true}, {active, false}]),
+    Master ! proceed,
+    {ok, {A, P, Res}} = gen_udp:recv(ServerSocket, 0),
+    ?DEBUG("RECVED : SOCKS5 proxy tunnel => ~p", [Res]),
+    ok = gen_udp:send(ServerSocket, A, P, Res),
+    ?DEBUG("SENDING: ~p => SOCKS5 proxy tunnel", [Res]),
+    gen_udp:close(ServerSocket)
+  end),
+  receive proceed -> ok end,
+  {ok, RelaySocket} = gen_udp:open(0, [binary, {active, false}]),
+  ok = gen_udp:send(RelaySocket, RelayAddress, RelayPort, socks5:udp_datagram(0, DestAddress, DestPort + 42, ?WHAT_TO_SEND)),
+  {ok, _, _, _, Res} = socks5:recv_udp_datagram(RelaySocket),
+  ?DEBUG("RECVED : SOCKS5 proxy tunnel => ~p", [Res]),
   ?DEBUG("U ASSOC: OK", []).
 
 
