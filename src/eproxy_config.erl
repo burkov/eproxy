@@ -1,4 +1,4 @@
--module(config).
+-module(eproxy_config).
 -author(alex_burkov).
 
 -behaviour(gen_server).

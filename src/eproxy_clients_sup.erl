@@ -1,11 +1,11 @@
--module(client_sup).
+-module(eproxy_clients_sup).
 -author(alex_burkov).
 
 -behaviour(supervisor).
 
 -export([
   start_link/0,
-  start_client/1,
+  serve_client/1,
   init/1
 ]).
 
@@ -13,11 +13,11 @@
 
 start_link() -> supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-start_client(ClientSocket) ->
+serve_client(ClientSocket) ->
   supervisor:start_child(?SERVER, [ClientSocket]).
 
 init([]) ->
-  %% client is higly unrelaible one-time actor, it can crash easily but shouldn't affect its neighbours
+  %% eproxy_client is highly unrelaible actor, it can crash easily but shouldn't affect its neighbours
   {ok, {{simple_one_for_one, 0, 1}, [
-    {not_used, {client, start_link, []}, temporary, 2000, worker, [client]}
+    {not_used, {eproxy_client, start_link, []}, temporary, 2000, worker, [eproxy_client]}
   ]}}.

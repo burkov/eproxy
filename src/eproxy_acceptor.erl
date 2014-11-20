@@ -1,4 +1,4 @@
--module(router).
+-module(eproxy_acceptor).
 -author(alex_burkov).
 
 -behaviour(gen_server).
@@ -25,7 +25,7 @@ start_link() ->
 
 init([]) ->
   put(owners, []), % FIXME for debug only. see fun print_port_owners_on_change/0
-  PortNum = config:get_server_port_number(),
+  PortNum = eproxy_config:get_server_port_number(),
   {ok, Socket} = gen_tcp:listen(PortNum, [
     binary,
     {nodelay, true},
@@ -38,7 +38,7 @@ init([]) ->
 
 handle_call(Request, _From, State) ->
   lager:warning("unexpected call ~p", [Request]),
-  {reply, ok, State}.
+  {reply, {error, unsupported}, State}.
 
 handle_cast(Request, State) ->
   lager:warning("unexpected cast ~p", [Request]),
@@ -48,7 +48,7 @@ handle_info(accept, #state{socket = Socket} = State) ->
   case gen_tcp:accept(Socket, ?ACCEPT_TIMEOUT_MS) of
     {ok, ClientSocket} ->
       try
-        {ok, Pid} = client_sup:start_client(ClientSocket),
+        {ok, Pid} = eproxy_clients_sup:serve_client(ClientSocket),
         gen_tcp:controlling_process(ClientSocket, Pid) % erlang will close it if process crashes
       catch Type:Reason ->
         lager:warning("failed to spawn worker for ~p, got ~p with reason: ~p", [inet:peername(ClientSocket), Type, Reason]),
@@ -68,11 +68,8 @@ handle_info(Info, State) ->
   lager:warning("unexpected info ~p", [Info]),
   {noreply, State}.
 
-terminate(Reason, _State) ->
-  lager:warning("termination, reason:~p", [Reason]).
-
-code_change(_OldVsn, State, _Extra) ->
-  {ok, State}.
+terminate(Reason, _State) -> lager:warning("termination, reason:~p", [Reason]).
+code_change(_OldVsn, State, _Extra) -> {ok, State}.
 
 -spec opened_tcp_ports_owners() -> [pid()].
 %% @doc returns list of all node's TCP socket owners
@@ -100,7 +97,5 @@ print_port_owners_on_change() ->
 -spec pp_delta(integer()) -> string().
 %% @doc pretty-printer for non-zero integers' delta. adds '+' sign in front of positive deltas.
 pp_delta(0) -> exit(bad_arg);
-pp_delta(X) when X < 0 ->
-  io_lib:format("~w", [X]);
-pp_delta(X) when X > 0 ->
-  io_lib:format("+~w", [X]).
+pp_delta(X) when X < 0 -> io_lib:format("~w", [X]);
+pp_delta(X) when X > 0 -> io_lib:format("+~w", [X]).

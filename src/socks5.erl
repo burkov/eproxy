@@ -6,21 +6,24 @@
 -export([
   auth_method_selection_request/1,
   auth_method_selection_reply/1,
-  request/3,
-  reply/3,
-  udp_datagram/4,
+  request/2,
+  reply/2,
+  udp_datagram/3,
   auth_method/1,
   command/1,
   address_type/1,
 
+  recv_auth_method_selection_request/1,
   recv_reply/1,
   recv_udp_datagram/1
 ]).
 
 
+-define(RECV_TIEMOUT_MS, 1000).
+
 -spec auth_method_selection_request([auth_method()]) -> binary().
 %% @doc constructs cleint's auth method selection request
-auth_method_selection_request(MethodNames) ->
+auth_method_selection_request(MethodNames) when is_list(MethodNames) ->
   Methods = lists:usort([auth_method(M) || M <- MethodNames, is_atom(M)]),
   NMethods = length(Methods),
   <<?VERSION_SOCKS5, NMethods:8, (list_to_binary(Methods))/binary>>.
@@ -30,23 +33,28 @@ auth_method_selection_request(MethodNames) ->
 auth_method_selection_reply(Method) when is_atom(Method) ->
   <<?VERSION_SOCKS5, (auth_method(Method)):8>>.
 
--spec request(command(), inet:ip_address() | string(), inet:port_number()) -> binary().
+-spec request(command(), address_and_port()) -> binary().
 %% @doc constructs client's request
-request(Command, Address, Port) when is_atom(Command) ->
-  <<?VERSION_SOCKS5, (command(Command)):8, ?RESERVED, (address_to_binary(Address))/binary, Port:16>>.
+request(Command, {Address, Port}) when is_atom(Command) ->
+  <<?VERSION_SOCKS5, (command(Command)):8, ?RESERVED, (address_port_to_binary({Address, Port}))/binary>>.
 
--spec reply(reply_code(), inet:ip_address() | string(), inet:port_number()) -> binary().
+-spec reply(reply_code(), address_and_port()) -> binary().
 %% @doc constructs client's reply
-reply(ReplyCode, Address, Port) when is_atom(ReplyCode) ->
-  <<?VERSION_SOCKS5, (reply_code(ReplyCode)):8, ?RESERVED, (address_to_binary(Address))/binary, Port:16>>.
+reply(ReplyCode, {Address, Port}) when is_atom(ReplyCode) ->
+  <<?VERSION_SOCKS5, (reply_code(ReplyCode)):8, ?RESERVED, (address_port_to_binary({Address, Port}))/binary>>.
 
--spec udp_datagram(pos_integer(), inet:ip_address() | string(), inet:port_number(), binary()) -> binary().
+-spec udp_datagram(byte(), address_and_port(), binary()) -> binary().
 %% @doc wraps UDP datagrap with a header
-udp_datagram(FragmentNo, Address, Port, Data) ->
-  <<?RESERVED:16, FragmentNo:8, (address_to_binary(Address))/binary, Port:16, Data/binary>>.
+udp_datagram(FragmentNo, {Address, Port}, Data) ->
+  <<?RESERVED:16, FragmentNo:8, (address_port_to_binary({Address, Port}))/binary, Data/binary>>.
+
+-spec address_port_to_binary(address_and_port()) -> binary().
+%% @doc converts address and port into their coded representation
+address_port_to_binary({Address, Port}) when is_tuple(Address); is_list(Address) ->
+  <<(address_to_binary(Address))/binary, Port:16>>.
 
 -spec address_to_binary(inet:ip_address() | string()) -> binary().
-%% @doc converts address of given type into its coded representation
+%% @doc converts address into its coded representation
 address_to_binary(Tuple) when is_tuple(Tuple) ->
   case tuple_size(Tuple) of
     4 -> <<?ADDRESS_TYPE_IPV4, (list_to_binary(tuple_to_list(Tuple)))/binary>>;
@@ -60,8 +68,8 @@ address_to_binary(List) when is_list(List) ->
   end.
 
 -spec auth_method
-    (pos_integer()) -> auth_method();
-    (auth_method()) -> pos_integer().
+    (byte()) -> auth_method();
+    (auth_method()) -> byte().
 %% @doc associates authorization method pre-coded value with its atomized name and vice versa
 auth_method(?AUTH_METHOD_NO_AUTH) -> no_auth;
 auth_method(?AUTH_METHOD_GSSAPI) -> gssapi;
@@ -75,8 +83,8 @@ auth_method(password) -> ?AUTH_METHOD_PASSWORD;
 auth_method(no_acceptable_methods) -> ?NO_ACCEPTABLE_MATHODS.
 
 -spec address_type
-    (pos_integer()) -> address_type();
-    (address_type()) -> pos_integer().
+    (byte()) -> address_type();
+    (address_type()) -> byte().
 %% @doc associates address type pre-coded value with its atomized name and vice versa
 address_type(?ADDRESS_TYPE_IPV4) -> ipv4;
 address_type(?ADDRESS_TYPE_DOMAIN_NAME) -> domain_name;
@@ -87,8 +95,8 @@ address_type(domain_name) -> ?ADDRESS_TYPE_DOMAIN_NAME;
 address_type(ipv6) -> ?ADDRESS_TYPE_IPV6.
 
 -spec command
-    (pos_integer()) -> command();
-    (command()) -> pos_integer().
+    (byte()) -> command();
+    (command()) -> byte().
 %% @doc associates command pre-coded value with its atomized name and vice versa
 command(?COMMAND_CONNECT) -> connect;
 command(?COMMAND_BIND) -> bind;
@@ -99,8 +107,8 @@ command(bind) -> ?COMMAND_BIND;
 command(udp_associate) -> ?COMMAND_UDP_ASSOCIATE.
 
 -spec reply_code
-    (pos_integer()) -> reply_code();
-    (reply_code()) -> pos_integer().
+    (byte()) -> reply_code();
+    (reply_code()) -> byte().
 %% @doc associates reply code value with its atomized name and vice versa
 reply_code(?REPLY_SUCCEEDED) -> succeeded;
 reply_code(?REPLY_GENERAL_FAILURE) -> general_failure;
@@ -123,47 +131,53 @@ reply_code(command_not_supported) -> ?REPLY_COMMAND_NOT_SUPPORTED;
 reply_code(address_type_not_supported) -> ?REPLY_ADDRESS_TYPE_NOT_SUPPORTED.
 
 
--spec recv_reply(gen_tcp:socket()) -> {ok, {reply_code(), {address_type(), inet:ip_address()|string()}, inet:port_number()}} | {error, Reason :: any()}.
+recv_auth_method_selection_request(Socket) ->
+  try
+    {ok, <<?VERSION_SOCKS5, NMethods>>} = gen_tcp:recv(Socket, 2, ?RECV_TIEMOUT_MS),
+    {ok, Methods} = gen_tcp:recv(Socket, NMethods, ?RECV_TIEMOUT_MS),
+    {ok, lists:usort([auth_method(M) || <<M>> <= Methods])}
+  catch _:Reason -> {error, Reason}
+  end.
+
+-spec recv_reply(gen_tcp:socket()) -> {ok, {reply_code(), address_and_port()}} | {error, Reason :: any()}.
 %% @doc receives socks5 reply from given passive socket. throw-safe.
 recv_reply(Socket) ->
   try
-    {ok, <<?VERSION_SOCKS5, ReplyCode, ?RESERVED, AType>>} = gen_tcp:recv(Socket, 4),
-    Address = recv_address(Socket, AType),
-    {ok, <<Port:16>>} = gen_tcp:recv(Socket, 2),
-    {ok, {reply_code(ReplyCode), {address_type(AType), Address}, Port}}
-  catch T:E -> {error, {T, E}}
+    {ok, <<?VERSION_SOCKS5, ReplyCode, ?RESERVED, AType>>} = gen_tcp:recv(Socket, 4, ?RECV_TIEMOUT_MS),
+    {ok, {reply_code(ReplyCode), recv_address_port(Socket, AType)}}
+  catch _:Reason -> {error, Reason}
   end.
 
+
+-spec recv_address_port(gen_tcp:socket(), byte()) -> address_and_port().
+%% @doc receives socks5 address and port from given passive socket.
+recv_address_port(Socket, Type) ->
+  Address = recv_address(Socket, Type),
+  {ok, <<Port:16>>} = gen_tcp:recv(Socket, 2, ?RECV_TIEMOUT_MS),
+  {Address, Port}.
+
+-spec recv_address(gen_tcp:socket(), byte()) -> inet:ip_address() | string().
+%% @doc receives socks5 address from given passive socket.
 recv_address(Socket, ?ADDRESS_TYPE_IPV4) ->
-  try
-    {ok, A} = gen_tcp:recv(Socket, 4),
-    list_to_tuple(binary_to_list(A))
-  catch T:E -> {error, {T, E}}
-  end;
+  {ok, A} = gen_tcp:recv(Socket, 4, ?RECV_TIEMOUT_MS),
+  list_to_tuple(binary_to_list(A));
 
 recv_address(Socket, ?ADDRESS_TYPE_IPV6) ->
-  try
-    {ok, A} = gen_tcp:recv(Socket, 16),
-    list_to_tuple([X || <<X:16>> <= A])
-  catch T:E -> {error, {T, E}}
-  end;
+  {ok, A} = gen_tcp:recv(Socket, 16, ?RECV_TIEMOUT_MS),
+  list_to_tuple([X || <<X:16>> <= A]);
 
 recv_address(Socket, ?ADDRESS_TYPE_DOMAIN_NAME) ->
-  try
-    {ok, <<Len>>} = gen_tcp:recv(Socket, 1),
-    {ok, Name} = gen_tcp:recv(Socket, Len),
-    Name
-  catch T:E -> {error, {T, E}}
-  end.
+  {ok, <<Len>>} = gen_tcp:recv(Socket, 1, ?RECV_TIEMOUT_MS),
+  {ok, Name} = gen_tcp:recv(Socket, Len, ?RECV_TIEMOUT_MS),
+  Name.
 
 
-%% -spec recv_udp_datagram(gen_tcp:socket()) ->
-%%   {ok, {address_type(), inet:ip_address() | string()}, inet:port_number(), binary()} | {error, Reason :: any()}.
+-spec recv_udp_datagram(gen_tcp:socket()) ->
+  {ok, Relay :: address_and_port(), Source :: address_and_port(), FragmentNo :: fragment_no(), Data :: binary()} | {error, Reason :: any()}.
 %% @doc receives socks5 udp datagram from given passive socket. throw-safe.
 recv_udp_datagram(Socket) ->
   try
-    {ok, {RelayAddress, RelayPort, <<?RESERVED:16, Fragment:8, AType:8, Rest/binary>>}} = gen_udp:recv(Socket, 0),
-
+    {ok, {RelayAddress, RelayPort, <<?RESERVED:16, Fragment:8, AType:8, Rest/binary>>}} = gen_udp:recv(Socket, 0, ?RECV_TIEMOUT_MS),
     case AType of
       ?ADDRESS_TYPE_DOMAIN_NAME ->
         <<Len:8, Rest2/binary>> = Rest,
@@ -173,9 +187,9 @@ recv_udp_datagram(Socket) ->
         <<IPv4Addr:32, Port:16, OriginalData/binary>> = Rest,
         {ok, {RelayAddress, RelayPort}, {IPv4Addr, Port}, Fragment, OriginalData};
       ?ADDRESS_TYPE_IPV6 ->
-        <<IPv6Addr:(8*16), Port:16, OriginalData/binary>> = Rest,
+        <<IPv6Addr:(8 * 16), Port:16, OriginalData/binary>> = Rest,
         {ok, {RelayAddress, RelayPort}, {IPv6Addr, Port}, Fragment, OriginalData}
     end
-  catch T:E -> {error, {T, E}}
+  catch Reason -> {error, Reason}
   end.
 

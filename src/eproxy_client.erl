@@ -1,4 +1,4 @@
--module(client).
+-module(eproxy_client).
 -author(alex_burkov).
 
 -behaviour(gen_fsm).
@@ -27,27 +27,22 @@
 -define(AUTH_SUBROUTINE_TIMEOUT_MS, 2000).
 
 -record(state, {
-  socket :: gen_tcp:socket(),
-  slave :: pid()
+  in_socket :: gen_tcp:socket(),
+  out_socket :: gen_tcp:socket()
 }).
-
 
 start_link(Socket) ->
   gen_fsm:start_link(?MODULE, [Socket], []).
 
 init([Socket]) ->
   {ok, {Address, Port}} = inet:peername(Socket),
-  lager:debug("client connected, socket: ~p:~p", [inet:ntoa(Address), Port]),
-
-%%   Slave = erlang:spawn(?MODULE, slave, [self(), Socket]),
-%%   Slave ! recv_auth_method_selection,
-  inet:setopts(Socket, [{active, true}]),
-  Slave = 42,
-  {ok, auth_method_selection, #state{socket = Socket, slave = Slave}, ?AUTH_METHOD_NEGOTIATION_TIMEOUT_MS}.
+  lager:debug("client connected, ~p:~p", [inet:ntoa(Address), Port]),
+  eproxy_negotiation:start_link(Socket),
+  {ok, auth_method_selection, #state{in_socket = Socket}, ?AUTH_METHOD_NEGOTIATION_TIMEOUT_MS}.
 
 %%% auth method selection
 
-auth_method_selection({auth_methods, AuthMethods}, #state{socket = Socket, slave = Slave} = State) ->
+auth_method_selection({auth_methods, AuthMethods}, #state{in_socket = Socket} = State) ->
   case select_supported_auth_method(AuthMethods) of
     none ->
       lager:debug("none of auth methods passed is supported by server"),
@@ -55,7 +50,7 @@ auth_method_selection({auth_methods, AuthMethods}, #state{socket = Socket, slave
       {stop, normal, State};
     Method ->
       lager:debug("selected auth method: '~p'. proceeding to authentication subroutine", [Method]),
-      Slave ! {do_authentication, Method},
+      42 ! {do_authentication, Method},
       {next_state, request, State, ?AUTH_SUBROUTINE_TIMEOUT_MS}
   end;
 
@@ -111,7 +106,7 @@ handle_info(Info, _StateName, State) ->
   lager:warning("unexpected info ~p", [Info]),
   {stop, unsupported_info, State}.
 
-terminate(Reason, StateName, #state{socket = Socket}) ->
+terminate(Reason, StateName, #state{in_socket = Socket}) ->
   gen_tcp:close(Socket),
   lager:warning("termination in state '~p', reason: ~p", [StateName, Reason]).
 
@@ -120,7 +115,7 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 
 select_supported_auth_method(MethodsBin) ->
   ClientMethodsSet = sets:from_list([socks5:auth_method(X) || <<X>> <= MethodsBin]),
-  ServerMethodsSet = config:get_auth_methods(),
+  ServerMethodsSet = eproxy_config:get_auth_methods(),
   case sets:to_list(sets:intersection(ClientMethodsSet, ServerMethodsSet)) of
     [] -> none;
     [OnlyOne] -> OnlyOne;
@@ -158,13 +153,7 @@ slave(M, S) ->
 %%         lager:debug("master is down with reason: ~p, exiting", [Reason]),
 %%         exit(normal);
       recv_auth_method_selection ->
-        {ok, <<ProtocolVersion:8, MethodsCount:8>>} = gen_tcp:recv(Socket, 2, ?RECV_TIMEOUT_MS),
-        ?VALIDATE("auth method negotiation",
-          throw_if(ProtocolVersion =/= ?VERSION_SOCKS5, {unsupported_socks_version, ProtocolVersion})
-        ),
-        lager:debug("protocol socks5, fetching supported auth methods list (~p items)", [MethodsCount]),
-        {ok, Methods} = gen_tcp:recv(Socket, MethodsCount, ?RECV_TIMEOUT_MS),
-        gen_fsm:send_event(Master, {auth_methods, Methods});
+
       {do_authentication, no_auth} ->
         %% nothing to do
         lager:debug("authntication complete (~p)", [no_auth]),

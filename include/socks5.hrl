@@ -34,8 +34,10 @@
 -define(REPLT_UNASSIGNED_HIGH, 16#ff).
 
 
+-type address_and_port() :: {inet:ip_address() | string(), inet:port_number()}.
 -type auth_method() :: no_auth | gssapi | password | iana_assigned | private_methods | no_acceptable_methods.
 -type command() :: connect | bind | udp_associate | invalid_command.
 -type address_type() :: ipv4 | domain_name | ipv6 | invalid_address_type.
 -type reply_code() :: succeeded | general_failure | connection_not_allowed_by_ruleset | network_unreachable | host_unreachable |
 connection_refused | ttl_expired | command_not_supported | address_type_not_supported | unassigned.
+-type fragment_no() :: byte().
