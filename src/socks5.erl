@@ -13,13 +13,16 @@
   command/1,
   address_type/1,
 
+  send_auth_method_selection_reply/2,
+  send_auth_method_selection_reject/1,
+
   recv_auth_method_selection_request/1,
   recv_reply/1,
   recv_udp_datagram/1
 ]).
 
 
--define(RECV_TIEMOUT_MS, 1000).
+-define(RECV_TIMEOUT_MS, 1000).
 
 -spec auth_method_selection_request([auth_method()]) -> binary().
 %% @doc constructs cleint's auth method selection request
@@ -131,10 +134,16 @@ reply_code(command_not_supported) -> ?REPLY_COMMAND_NOT_SUPPORTED;
 reply_code(address_type_not_supported) -> ?REPLY_ADDRESS_TYPE_NOT_SUPPORTED.
 
 
+send_auth_method_selection_reply(Socket, Mathod) when is_atom(Method) ->
+  ok.
+
+send_auth_method_selection_reject(Socket) ->
+  ok.
+
 recv_auth_method_selection_request(Socket) ->
   try
-    {ok, <<?VERSION_SOCKS5, NMethods>>} = gen_tcp:recv(Socket, 2, ?RECV_TIEMOUT_MS),
-    {ok, Methods} = gen_tcp:recv(Socket, NMethods, ?RECV_TIEMOUT_MS),
+    {ok, <<?VERSION_SOCKS5, NMethods>>} = gen_tcp:recv(Socket, 2, ?RECV_TIMEOUT_MS),
+    {ok, Methods} = gen_tcp:recv(Socket, NMethods, ?RECV_TIMEOUT_MS),
     {ok, lists:usort([auth_method(M) || <<M>> <= Methods])}
   catch _:Reason -> {error, Reason}
   end.
@@ -143,7 +152,7 @@ recv_auth_method_selection_request(Socket) ->
 %% @doc receives socks5 reply from given passive socket. throw-safe.
 recv_reply(Socket) ->
   try
-    {ok, <<?VERSION_SOCKS5, ReplyCode, ?RESERVED, AType>>} = gen_tcp:recv(Socket, 4, ?RECV_TIEMOUT_MS),
+    {ok, <<?VERSION_SOCKS5, ReplyCode, ?RESERVED, AType>>} = gen_tcp:recv(Socket, 4, ?RECV_TIMEOUT_MS),
     {ok, {reply_code(ReplyCode), recv_address_port(Socket, AType)}}
   catch _:Reason -> {error, Reason}
   end.
@@ -153,22 +162,22 @@ recv_reply(Socket) ->
 %% @doc receives socks5 address and port from given passive socket.
 recv_address_port(Socket, Type) ->
   Address = recv_address(Socket, Type),
-  {ok, <<Port:16>>} = gen_tcp:recv(Socket, 2, ?RECV_TIEMOUT_MS),
+  {ok, <<Port:16>>} = gen_tcp:recv(Socket, 2, ?RECV_TIMEOUT_MS),
   {Address, Port}.
 
 -spec recv_address(gen_tcp:socket(), byte()) -> inet:ip_address() | string().
 %% @doc receives socks5 address from given passive socket.
 recv_address(Socket, ?ADDRESS_TYPE_IPV4) ->
-  {ok, A} = gen_tcp:recv(Socket, 4, ?RECV_TIEMOUT_MS),
+  {ok, A} = gen_tcp:recv(Socket, 4, ?RECV_TIMEOUT_MS),
   list_to_tuple(binary_to_list(A));
 
 recv_address(Socket, ?ADDRESS_TYPE_IPV6) ->
-  {ok, A} = gen_tcp:recv(Socket, 16, ?RECV_TIEMOUT_MS),
+  {ok, A} = gen_tcp:recv(Socket, 16, ?RECV_TIMEOUT_MS),
   list_to_tuple([X || <<X:16>> <= A]);
 
 recv_address(Socket, ?ADDRESS_TYPE_DOMAIN_NAME) ->
-  {ok, <<Len>>} = gen_tcp:recv(Socket, 1, ?RECV_TIEMOUT_MS),
-  {ok, Name} = gen_tcp:recv(Socket, Len, ?RECV_TIEMOUT_MS),
+  {ok, <<Len>>} = gen_tcp:recv(Socket, 1, ?RECV_TIMEOUT_MS),
+  {ok, Name} = gen_tcp:recv(Socket, Len, ?RECV_TIMEOUT_MS),
   Name.
 
 
@@ -177,7 +186,7 @@ recv_address(Socket, ?ADDRESS_TYPE_DOMAIN_NAME) ->
 %% @doc receives socks5 udp datagram from given passive socket. throw-safe.
 recv_udp_datagram(Socket) ->
   try
-    {ok, {RelayAddress, RelayPort, <<?RESERVED:16, Fragment:8, AType:8, Rest/binary>>}} = gen_udp:recv(Socket, 0, ?RECV_TIEMOUT_MS),
+    {ok, {RelayAddress, RelayPort, <<?RESERVED:16, Fragment:8, AType:8, Rest/binary>>}} = gen_udp:recv(Socket, 0, ?RECV_TIMEOUT_MS),
     case AType of
       ?ADDRESS_TYPE_DOMAIN_NAME ->
         <<Len:8, Rest2/binary>> = Rest,
