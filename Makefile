@@ -10,3 +10,6 @@ test: compile
 
 dialyze:
 	dialyzer -pa deps/lager/ebin -I deps/lager/include ebin/*.beam
+	
+dante:
+	dante-1.4.1/sockd/sockd -p sockd.pid -f sockd.conf -D
