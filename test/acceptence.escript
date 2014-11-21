@@ -24,14 +24,14 @@ main([]) ->
 main([AddressPort]) when is_list(AddressPort) ->
   {Address, Port} = parse_args(AddressPort),
   ?DEBUG("connecting to ~p", [AddressPort]),
-  test_connect(Address, Port, {0,0,0,0,0,0,0,1}, 17332),
-  test_connect(Address, Port, {127,0,0,1}, 17333),
-  test_connect(Address, Port, "localhost", 17333),
-  test_bind(Address, Port, {127,0,0,1}, 100),
-  test_bind(Address, Port, {0,0,0,0,0,0,0,1}, 101),
-  test_bind(Address, Port, "localhost", 101),
-  test_udp_associate(Address, Port, {127, 0, 0, 1}, 17334),
-  test_udp_associate(Address, Port, {0,0,0,0,0,0,0,1}, 17335),
+%%   test_connect(Address, Port, {0,0,0,0,0,0,0,1}, 17332),
+%%   test_connect(Address, Port, {127,0,0,1}, 17333),
+%%   test_connect(Address, Port, "localhost", 17333),
+%%   test_bind(Address, Port, {127,0,0,1}, 100),
+%%   test_bind(Address, Port, {0,0,0,0,0,0,0,1}, 101),
+%%   test_bind(Address, Port, "localhost", 101),
+%%   test_udp_associate(Address, Port, {127, 0, 0, 1}, 17334),
+%%   test_udp_associate(Address, Port, {0,0,0,0,0,0,0,1}, 17335),
   test_udp_associate(Address, Port, "localhost", 17336).
 
 test_connect(Address, Port, DestAddress, DestPort) ->

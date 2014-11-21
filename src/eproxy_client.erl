@@ -37,23 +37,25 @@
 
 -record(state, {
   negotiator :: pid(),
-  relays :: {pid(), pid()},
-  in_socket :: gen_tcp:socket(),
-  out_socket :: gen_tcp:socket()
+  in_tcp_socket :: gen_tcp:socket(),
+  out_tcp_socket :: gen_tcp:socket(),
+  in_udp_socket :: gen_udp:socket(),
+  out_udp_socket :: gen_udp:socket(),
+  relays :: {pid(), pid()}
 }).
 
 start_link(Socket) ->
   gen_fsm:start_link(?MODULE, [Socket], []).
 
-init([Socket]) ->
-  {ok, {Address, Port}} = inet:peername(Socket),
+init([InSocket]) ->
+  {ok, {Address, Port}} = inet:peername(InSocket),
   lager:debug("client connected, ~p:~p", [inet:ntoa(Address), Port]),
-  Slave = eproxy_negotiator:start_link(Socket),
-  {ok, auth_method_selection, #state{in_socket = Socket, negotiator = Slave}, ?AUTH_METHOD_NEGOTIATION_TIMEOUT_MS}.
+  Slave = eproxy_negotiator:spawn_link(InSocket),
+  {ok, auth_method_selection, #state{in_tcp_socket = InSocket, negotiator = Slave}, ?AUTH_METHOD_NEGOTIATION_TIMEOUT_MS}.
 
 %%% auth method selection
 
-auth_method_selection({auth_methods, AuthMethods}, #state{in_socket = Socket, negotiator = Slave} = State) ->
+auth_method_selection({auth_methods, AuthMethods}, #state{in_tcp_socket = Socket, negotiator = Slave} = State) ->
   ClientMethodsSet = sets:from_list([AuthMethods]),
   ServerMethodsSet = eproxy_config:get_auth_methods(),
 
@@ -94,16 +96,16 @@ authentication(Event, From, State) -> {stop, {unsupported_sync_event, From, Even
 -define(REPLY_AND_STOP(Socket, Reply, Reason, State), begin socks5:send_reply(Socket, Reply), {stop, Reason, State} end).
 -define(REPLY_AND_STOP(Socket, Reason, State), ?REPLY_AND_STOP(Socket, Reason, Reason, State)).
 
-request({_, {error, invlaid_address_type}}, #state{in_socket = Socket} = State) ->
+request({_, {error, invlaid_address_type}}, #state{in_tcp_socket = Socket} = State) ->
   ?REPLY_AND_STOP(Socket, address_type_not_supported, State);
 
-request({Type, {DestAddress, DestPort}}, #state{in_socket = InSocket} = State) ->
+request({Type, {DestAddress, DestPort}}, #state{in_tcp_socket = InSocket} = State) ->
   case to_ip_address(DestAddress) of
     {error, invalid_address} -> ?REPLY_AND_STOP(InSocket, general_failure, {invalid_address, DestAddress}, State);
     {ok, TargetIpAddress} -> handle_request(Type, {TargetIpAddress, DestPort}, State)
   end;
 
-request({invalid_command, {_Address, _Port}}, #state{in_socket = Socket} = State) ->
+request({invalid_command, {_Address, _Port}}, #state{in_tcp_socket = Socket} = State) ->
   ?REPLY_AND_STOP(Socket, command_not_supported, State);
 
 request(timeout, State) ->
@@ -115,27 +117,35 @@ request(Event, From, State) -> {stop, {unsupported_sync_event, From, Event}, Sta
 
 %%% accept
 
-accept({accepted, DestAddr, DestPort}, #state{in_socket = InSocket} = State) ->
+accept({accepted, OutSocket, DestAddr, DestPort}, #state{in_tcp_socket = InSocket, negotiator = Slave} = State) ->
   ok = socks5:send_reply(InSocket, succeeded, {DestAddr, DestPort}),
-  %% TODO stopped here
-  {next_state, relaying, State};
-accept({accept_failure, Reason}, State) -> {stop, {failed_to_accept_incoming_connection, Reason}, State};
+  Slave ! stop,
+  OutgoingRelay = eproxy_tcp_relay:spawn_link(InSocket, OutSocket),
+  IncomingRelay = eproxy_tcp_relay:spawn_link(OutSocket, InSocket),
+  {next_state, relaying, State#state{
+    negotiator = undefined,
+    out_tcp_socket = OutSocket,
+    relays = {OutgoingRelay, IncomingRelay}
+  }};
+accept({accept_failure, Reason}, #state{in_tcp_socket = InSocket} = State) ->
+  ?REPLY_AND_STOP(InSocket, general_failure, {failed_to_accept_incoming_connection, Reason}, State);
+
 accept(Event, State) -> {stop, {unsupported_event, Event}, State}.
 accept(Event, From, State) -> {stop, {unsupported_sync_event, From, Event}, State}.
 
 
 %%% relaying
 
-relaying({connection_closed, S}, #state{in_socket = S} = State) ->
+relaying({connection_closed, S}, #state{in_tcp_socket = S} = State) ->
   lager:debug("incoming connection closed"),
   {stop, normal, State};
-relaying({connection_error, Reason, S}, #state{in_socket = S} = State) ->
+relaying({connection_error, Reason, S}, #state{in_tcp_socket = S} = State) ->
   lager:debug("incoming connection error"),
   {stop, fixme, State};
-relaying({connection_closed, S}, #state{out_socket = S} = State) ->
+relaying({connection_closed, S}, #state{out_tcp_socket = S} = State) ->
   lager:debug("outgoing connection closed"),
   {stop, normal, State};
-relaying({connection_error, Reason, S}, #state{out_socket = S} = State) ->
+relaying({connection_error, Reason, S}, #state{out_tcp_socket = S} = State) ->
   lager:debug("outgoing connection error"),
   {stop, fixme, State};
 relaying(Event, State) -> {stop, {unsupported_event, Event}, State}.
@@ -147,11 +157,13 @@ handle_event(Event, _StateName, State) -> {stop, {unsupported_all_state_event, E
 handle_sync_event(Event, From, _StateName, State) -> {stop, {unsupported_all_state_sync_event, From, Event}, State}.
 handle_info(Info, _StateName, State) -> {stop, {unsupported_info, Info}, State}.
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
-terminate(Reason, StateName, #state{negotiator = N, in_socket = InSocket, out_socket = OutSocket, relays = Relays}) ->
-  N ! stop,
-  [R ! stop || R <- tuple_to_list(Relays)],
-  gen_tcp:close(InSocket),
-  gen_tcp:close(OutSocket),
+terminate(Reason, StateName, S) ->
+  S#state.negotiator ! stop,
+  [R ! stop || R <- tuple_to_list(S#state.relays)],
+  gen_tcp:close(S#state.in_tcp_socket),
+  gen_tcp:close(S#state.out_tcp_socket),
+  gen_udp:close(S#state.in_udp_socket),
+  gen_udp:close(S#state.out_udp_socket),
   lager:warning("termination in state '~p', reason: ~p", [StateName, Reason]).
 
 
@@ -172,7 +184,7 @@ to_ip_address(DestAddress) ->
   end.
 
 -spec handle_request(command(), {inet:ip_address(), inet:port_number()}, #state{}) -> {next_state, StateName :: any(), #state{}} | {stop, Reason :: any, #state{}}.
-handle_request(connect, {DestAddress, DestPort}, #state{in_socket = InSocket, negotiator = Slave} = State) ->
+handle_request(connect, {DestAddress, DestPort}, #state{in_tcp_socket = InSocket, negotiator = Slave} = State) ->
   case gen_tcp:connect(DestAddress, DestPort, [binary, {active, false}, {nodelay, true}, {}], ?CONNECT_TIMEOUT_MS) of
     {error, econnrefused} -> ?REPLY_AND_STOP(InSocket, connection_refused, State);
     {error, ehostunreach} -> ?REPLY_AND_STOP(InSocket, host_unreachable, State);
@@ -185,17 +197,17 @@ handle_request(connect, {DestAddress, DestPort}, #state{in_socket = InSocket, ne
         {ok, {BindAddress, BindPort}} ->
           ok = socks5:send_reply(InSocket, succeeded, {BindAddress, BindPort}),
           Slave ! stop,
-          OutgoingRelay = eproxy_relay:spawn_link(self(), InSocket, OutSocket),
-          IncomingRelay = eproxy_relay:spawn_link(self(), OutSocket, InSocket),
+          OutgoingRelay = eproxy_tcp_relay:spawn_link(InSocket, OutSocket),
+          IncomingRelay = eproxy_tcp_relay:spawn_link(OutSocket, InSocket),
           {next_state, relaying, State#state{
             negotiator = undefined,
-            relays = {OutgoingRelay, IncomingRelay},
-            out_socket = OutSocket
+            out_tcp_socket = OutSocket,
+            relays = {OutgoingRelay, IncomingRelay}
           }}
       end
   end;
 
-handle_request(bind, {DestAddress, DestPort}, #state{in_socket = InSocket, negotiator = Slave} = State) ->
+handle_request(bind, {DestAddress, DestPort}, #state{in_tcp_socket = InSocket, negotiator = Slave} = State) ->
   case gen_tcp:listen(0, [binary, {nodelay, true}, {active, false}]) of
     {error, Reason} -> ?REPLY_AND_STOP(InSocket, general_failure, {failed_to_open_out_socket, Reason}, State);
     {ok, OutSocket} ->
@@ -204,9 +216,31 @@ handle_request(bind, {DestAddress, DestPort}, #state{in_socket = InSocket, negot
         {ok, {BindAddress, BindPort}} ->
           ok = socks5:send_reply(InSocket, succeeded, {BindAddress, BindPort}),
           Slave ! {accept_connection_from, OutSocket, DestAddress, DestPort},
-          {next_state, accept, State#state{out_socket = OutSocket}}
+          {next_state, accept, State}
       end
   end;
 
-handle_request(udp_associate, {DestAddress, DestPort}, State) ->
-  {next_state, request, State}.
+handle_request(udp_associate, {DestAddress, DestPort}, #state{in_tcp_socket = ControlSocket, negotiator = Slave} = State) ->
+  case gen_udp:open(0, [binary, {active, false}]) of
+    {error, Reason} -> ?REPLY_AND_STOP(ControlSocket, general_failure, {failed_to_open_udp_relay, Reason}, State);
+    {ok, InUdpSocket} ->
+      case inet:sockname(InUdpSocket) of
+        {error, Reason} -> ?REPLY_AND_STOP(ControlSocket, general_failure, {failed_to_open_udp_relay, Reason}, State);
+        {ok, {InRelayAddress, InRelayPort}} ->
+          case gen_udp:open(0, [binary, {active, false}]) of
+            {error, Reason} ->
+              gen_udp:close(InUdpSocket),
+              ?REPLY_AND_STOP(ControlSocket, general_failure, {failed_to_open_udp_relay, Reason}, State);
+            {ok, OutUdpSocket} ->
+              ok = socks5:send_reply(succeeded, {InRelayAddress, InRelayPort}),
+              Slave ! stop,
+              OutgoingRelay = eproxy_udp_relay:spawn_link(InUdpSocket, OutUdpSocket, {DestAddress, DestPort}),
+              IncomingRelay = eproxy_udp_relay:spawn_link(OutUdpSocket, InUdpSocket),
+              {next_state, relaying, State#state{
+                in_udp_socket = InUdpSocket,
+                out_udp_socket = OutUdpSocket,
+                relays = {OutgoingRelay, IncomingRelay}
+              }}
+          end
+      end
+  end.

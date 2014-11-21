@@ -1,10 +1,10 @@
 -module(eproxy_negotiator).
 -author(alex_burkov).
 
--export([start_link/1, loop/2]).
+-export([spawn_link/1, loop/2]).
 
 
-start_link(Socket) when is_port(Socket)->
+spawn_link(Socket) when is_port(Socket)->
   (Pid = erlang:spawn_link(?MODULE, loop, [Socket, self()])) ! recv_auth_method_selection_request,
   Pid.
 
@@ -22,14 +22,14 @@ loop(Socket, Master) ->
       gen_fsm:send(Master, Request);
     {accept_connection_from, Socket, DestAddress, DestPort} ->
       case gen_tcp:accept(Socket) of
-        {ok, Socket} ->
-          case inet:peername(Socket) of
+        {ok, OutSocket} ->
+          case inet:peername(OutSocket) of
             {ok, {DestAddress, DestPort}} ->
-              ok = gen_tcp:controlling_process(Socket, Master),
-              gen_fsm:send(Master, {accepted, DestAddress, DestPort});
+              ok = gen_tcp:controlling_process(OutSocket, Master),
+              gen_fsm:send(Master, {accepted, OutSocket, DestAddress, DestPort});
             {ok, {OtherAddress, OtherPort}} ->
               lager:warning("incoming connection from: ~p:~p, expected ~p:~p", [OtherAddress, OtherPort, DestAddress, DestPort]),
-              gen_tcp:close(Socket),
+              gen_tcp:close(OutSocket),
               self() ! {accept_connection_from, Socket, DestAddress, DestPort}
           end;
         {error, Reason} ->

@@ -166,7 +166,7 @@ recv_reply(Socket) ->
   catch _:Reason -> {error, Reason}
   end.
 
-recv_request(Scoket) ->
+recv_request(Socket) ->
   {ok, request_code, {address, port}}.
 
 -spec recv_address_port(gen_tcp:socket(), byte()) -> {ok, address_and_port()} | {error, invalid_addess_type}.
