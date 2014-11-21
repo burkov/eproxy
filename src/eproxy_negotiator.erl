@@ -1,4 +1,4 @@
--module(eproxy_negotiation).
+-module(eproxy_negotiator).
 -author(alex_burkov).
 
 -export([start_link/1, loop/2]).
@@ -20,6 +20,21 @@ loop(Socket, Master) ->
     recv_request ->
       {ok, Request} = socks5:recv_request(Socket),
       gen_fsm:send(Master, Request);
+    {accept_connection_from, Socket, DestAddress, DestPort} ->
+      case gen_tcp:accept(Socket) of
+        {ok, Socket} ->
+          case inet:peername(Socket) of
+            {ok, {DestAddress, DestPort}} ->
+              ok = gen_tcp:controlling_process(Socket, Master),
+              gen_fsm:send(Master, {accepted, DestAddress, DestPort});
+            {ok, {OtherAddress, OtherPort}} ->
+              lager:warning("incoming connection from: ~p:~p, expected ~p:~p", [OtherAddress, OtherPort, DestAddress, DestPort]),
+              gen_tcp:close(Socket),
+              self() ! {accept_connection_from, Socket, DestAddress, DestPort}
+          end;
+        {error, Reason} ->
+          gen_fsm:send(Master, {accept_failure, Reason})
+      end;
     stop ->
       exit(normal)
   end,

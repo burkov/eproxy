@@ -15,6 +15,8 @@
   request/3,
   relaying/2,
   relaying/3,
+  accept/2,
+  accept/3,
 
 
   handle_event/3,
@@ -46,7 +48,7 @@ start_link(Socket) ->
 init([Socket]) ->
   {ok, {Address, Port}} = inet:peername(Socket),
   lager:debug("client connected, ~p:~p", [inet:ntoa(Address), Port]),
-  Slave = eproxy_negotiation:start_link(Socket),
+  Slave = eproxy_negotiator:start_link(Socket),
   {ok, auth_method_selection, #state{in_socket = Socket, negotiator = Slave}, ?AUTH_METHOD_NEGOTIATION_TIMEOUT_MS}.
 
 %%% auth method selection
@@ -95,42 +97,14 @@ authentication(Event, From, State) -> {stop, {unsupported_sync_event, From, Even
 request({_, {error, invlaid_address_type}}, #state{in_socket = Socket} = State) ->
   ?REPLY_AND_STOP(Socket, address_type_not_supported, State);
 
-request({connect, {DestAddress, DestPort}}, #state{in_socket = InSocket, negotiator = Slave} = State) ->
+request({Type, {DestAddress, DestPort}}, #state{in_socket = InSocket} = State) ->
   case to_ip_address(DestAddress) of
     {error, invalid_address} -> ?REPLY_AND_STOP(InSocket, general_failure, {invalid_address, DestAddress}, State);
-    {ok, TargetIpAddress} ->
-      case gen_tcp:connect(TargetIpAddress, DestPort, [binary, {active, false}, {nodelay, true}, {}], ?CONNECT_TIMEOUT_MS) of
-        {error, econnrefused} -> ?REPLY_AND_STOP(InSocket, connection_refused, State);
-        {error, ehostunreach} -> ?REPLY_AND_STOP(InSocket, host_unreachable, State);
-        {error, enetunreach} -> ?REPLY_AND_STOP(InSocket, network_unreachable, State);
-        {error, fixme} -> ?REPLY_AND_STOP(InSocket, ttl_expired, State); % FIXME find out appropriate posix error code
-        {error, Reason} -> ?REPLY_AND_STOP(InSocket, general_failure, {failed_to_open_out_socket, Reason}, State);
-        {ok, OutSocket} ->
-          case inet:sockname(OutSocket) of
-            {error, Reason} -> ?REPLY_AND_STOP(InSocket, general_failure, {failed_to_open_out_socket, Reason}, State);
-            {ok, {BindAddress, BindPort}} ->
-              socks5:send_reply(InSocket, succeeded, {BindAddress, BindPort}),
-              Slave ! stop,
-              OutgoingRelay = eproxy_relay:spawn_link(self(), InSocket, OutSocket),
-              IncomingRelay = eproxy_relay:spawn_link(self(), OutSocket, InSocket),
-              {next_state, relaying, State#state{
-                negotiator = undefined,
-                relays = {OutgoingRelay, IncomingRelay},
-                out_socket = OutSocket
-              }}
-          end
-      end
+    {ok, TargetIpAddress} -> handle_request(Type, {TargetIpAddress, DestPort}, State)
   end;
 
-request({bind, {Address, Port}}, State) ->
-  {next_state, request, State};
-
-request({udp_associate, {Address, Port}}, State) ->
-  {next_state, request, State};
-
-request({invalid_command, {Address, Port}}, #state{in_socket = Socket} = State) ->
-  socks5:send_reply(Socket, command_not_supported),
-  {stop, command_not_supported, State};
+request({invalid_command, {_Address, _Port}}, #state{in_socket = Socket} = State) ->
+  ?REPLY_AND_STOP(Socket, command_not_supported, State);
 
 request(timeout, State) ->
   lager:warning("request sending took too long (> ~p ms), exiting", [?REQUEST_TIMEOUT_MS]),
@@ -138,6 +112,17 @@ request(timeout, State) ->
 
 request(Event, State) -> {stop, {unsupported_event, Event}, State}.
 request(Event, From, State) -> {stop, {unsupported_sync_event, From, Event}, State}.
+
+%%% accept
+
+accept({accepted, DestAddr, DestPort}, #state{in_socket = InSocket} = State) ->
+  ok = socks5:send_reply(InSocket, succeeded, {DestAddr, DestPort}),
+  %% TODO stopped here
+  {next_state, relaying, State};
+accept({accept_failure, Reason}, State) -> {stop, {failed_to_accept_incoming_connection, Reason}, State};
+accept(Event, State) -> {stop, {unsupported_event, Event}, State}.
+accept(Event, From, State) -> {stop, {unsupported_sync_event, From, Event}, State}.
+
 
 %%% relaying
 
@@ -185,3 +170,43 @@ to_ip_address(DestAddress) ->
         {error, _} -> {error, invalid_address}
       end
   end.
+
+-spec handle_request(command(), {inet:ip_address(), inet:port_number()}, #state{}) -> {next_state, StateName :: any(), #state{}} | {stop, Reason :: any, #state{}}.
+handle_request(connect, {DestAddress, DestPort}, #state{in_socket = InSocket, negotiator = Slave} = State) ->
+  case gen_tcp:connect(DestAddress, DestPort, [binary, {active, false}, {nodelay, true}, {}], ?CONNECT_TIMEOUT_MS) of
+    {error, econnrefused} -> ?REPLY_AND_STOP(InSocket, connection_refused, State);
+    {error, ehostunreach} -> ?REPLY_AND_STOP(InSocket, host_unreachable, State);
+    {error, enetunreach} -> ?REPLY_AND_STOP(InSocket, network_unreachable, State);
+    {error, fixme} -> ?REPLY_AND_STOP(InSocket, ttl_expired, State); % FIXME find out appropriate posix error code
+    {error, Reason} -> ?REPLY_AND_STOP(InSocket, general_failure, {failed_to_open_out_socket, Reason}, State);
+    {ok, OutSocket} ->
+      case inet:sockname(OutSocket) of
+        {error, Reason} -> ?REPLY_AND_STOP(InSocket, general_failure, {failed_to_open_out_socket, Reason}, State);
+        {ok, {BindAddress, BindPort}} ->
+          ok = socks5:send_reply(InSocket, succeeded, {BindAddress, BindPort}),
+          Slave ! stop,
+          OutgoingRelay = eproxy_relay:spawn_link(self(), InSocket, OutSocket),
+          IncomingRelay = eproxy_relay:spawn_link(self(), OutSocket, InSocket),
+          {next_state, relaying, State#state{
+            negotiator = undefined,
+            relays = {OutgoingRelay, IncomingRelay},
+            out_socket = OutSocket
+          }}
+      end
+  end;
+
+handle_request(bind, {DestAddress, DestPort}, #state{in_socket = InSocket, negotiator = Slave} = State) ->
+  case gen_tcp:listen(0, [binary, {nodelay, true}, {active, false}]) of
+    {error, Reason} -> ?REPLY_AND_STOP(InSocket, general_failure, {failed_to_open_out_socket, Reason}, State);
+    {ok, OutSocket} ->
+      case inet:sockname(OutSocket) of
+        {error, Reason} -> ?REPLY_AND_STOP(InSocket, general_failure, {failed_to_open_out_socket, Reason}, State);
+        {ok, {BindAddress, BindPort}} ->
+          ok = socks5:send_reply(InSocket, succeeded, {BindAddress, BindPort}),
+          Slave ! {accept_connection_from, OutSocket, DestAddress, DestPort},
+          {next_state, accept, State#state{out_socket = OutSocket}}
+      end
+  end;
+
+handle_request(udp_associate, {DestAddress, DestPort}, State) ->
+  {next_state, request, State}.
