@@ -15,8 +15,11 @@
 
   send_auth_method_selection_reply/2,
   send_auth_method_selection_reject/1,
+  send_reply/2,
+  send_reply/3,
 
   recv_auth_method_selection_request/1,
+  recv_request/1,
   recv_reply/1,
   recv_udp_datagram/1
 ]).
@@ -134,6 +137,12 @@ reply_code(command_not_supported) -> ?REPLY_COMMAND_NOT_SUPPORTED;
 reply_code(address_type_not_supported) -> ?REPLY_ADDRESS_TYPE_NOT_SUPPORTED.
 
 
+send_reply(Socket, ErrorCode) ->
+  ok.
+
+send_reply(Socket, Code, {BindAddres, BindPort}) ->
+  ok.
+
 send_auth_method_selection_reply(Socket, Mathod) when is_atom(Method) ->
   ok.
 
@@ -157,29 +166,36 @@ recv_reply(Socket) ->
   catch _:Reason -> {error, Reason}
   end.
 
+recv_request(Scoket) ->
+  {ok, request_code, {address, port}}.
 
--spec recv_address_port(gen_tcp:socket(), byte()) -> address_and_port().
+-spec recv_address_port(gen_tcp:socket(), byte()) -> {ok, address_and_port()} | {error, invalid_addess_type}.
 %% @doc receives socks5 address and port from given passive socket.
 recv_address_port(Socket, Type) ->
-  Address = recv_address(Socket, Type),
-  {ok, <<Port:16>>} = gen_tcp:recv(Socket, 2, ?RECV_TIMEOUT_MS),
-  {Address, Port}.
+  case recv_address(Socket, Type) of
+    {ok, Address} ->
+      {ok, <<Port:16>>} = gen_tcp:recv(Socket, 2, ?RECV_TIMEOUT_MS),
+      {ok, {Address, Port}};
+    {error, _Reason} ->
+      {error, invalid_address_type}
+  end.
 
--spec recv_address(gen_tcp:socket(), byte()) -> inet:ip_address() | string().
+-spec recv_address(gen_tcp:socket(), byte()) -> {ok, inet:ip_address() | string()} | {error, Reason :: any()}.
 %% @doc receives socks5 address from given passive socket.
 recv_address(Socket, ?ADDRESS_TYPE_IPV4) ->
   {ok, A} = gen_tcp:recv(Socket, 4, ?RECV_TIMEOUT_MS),
-  list_to_tuple(binary_to_list(A));
+  {ok, list_to_tuple(binary_to_list(A))};
 
 recv_address(Socket, ?ADDRESS_TYPE_IPV6) ->
   {ok, A} = gen_tcp:recv(Socket, 16, ?RECV_TIMEOUT_MS),
-  list_to_tuple([X || <<X:16>> <= A]);
+  {ok, list_to_tuple([X || <<X:16>> <= A])};
 
 recv_address(Socket, ?ADDRESS_TYPE_DOMAIN_NAME) ->
   {ok, <<Len>>} = gen_tcp:recv(Socket, 1, ?RECV_TIMEOUT_MS),
-  {ok, Name} = gen_tcp:recv(Socket, Len, ?RECV_TIMEOUT_MS),
-  Name.
+  {ok, _Name} = gen_tcp:recv(Socket, Len, ?RECV_TIMEOUT_MS);
 
+recv_address(_Socket, _) ->
+  {error, invalid_address_type}.
 
 -spec recv_udp_datagram(gen_tcp:socket()) ->
   {ok, Relay :: address_and_port(), Source :: address_and_port(), FragmentNo :: fragment_no(), Data :: binary()} | {error, Reason :: any()}.
