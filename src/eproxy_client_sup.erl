@@ -1,4 +1,4 @@
--module(eproxy_clients_sup).
+-module(eproxy_client_sup).
 -author(alex_burkov).
 
 -behaviour(supervisor).
@@ -19,5 +19,5 @@ serve_client(ClientSocket) ->
 init([]) ->
   %% eproxy_client is highly unrelaible actor, it can crash easily but shouldn't affect its neighbours
   {ok, {{simple_one_for_one, 0, 1}, [
-    {not_used, {eproxy_client, start_link, []}, temporary, 2000, worker, [eproxy_client]}
+    {eproxy_client, {eproxy_client, start_link, []}, temporary, 2000, worker, [eproxy_client]}
   ]}}.

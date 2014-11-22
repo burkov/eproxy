@@ -98,7 +98,7 @@ output(time,Msg) ->
 output(severity,Msg) ->
   case lager_msg:severity(Msg) of
     debug -> " ";
-    info -> " ";
+    info -> "I";
     notice -> " ";
     warning -> "W";
     error -> "E";

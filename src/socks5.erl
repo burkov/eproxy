@@ -137,37 +137,44 @@ reply_code(command_not_supported) -> ?REPLY_COMMAND_NOT_SUPPORTED;
 reply_code(address_type_not_supported) -> ?REPLY_ADDRESS_TYPE_NOT_SUPPORTED.
 
 
-send_reply(Socket, ErrorCode) ->
-  ok.
+-spec send_reply(gen_tcp:socket(), reply_code()) -> ok | {error, Reason :: any}.
+send_reply(Socket, ErrorCode) when is_atom(ErrorCode) ->
+  try gen_tcp:send(Socket, <<?VERSION_SOCKS5, (reply_code(ErrorCode)):8, ?RESERVED>>)
+  catch _:Reason -> {error, Reason} end.
 
-send_reply(Socket, Code, {BindAddres, BindPort}) ->
-  ok.
+send_reply(Socket, Code, {_, _} = AP) when is_atom(Code) ->
+  try gen_tcp:send(Socket, <<?VERSION_SOCKS5, (reply_code(Code)):8, ?RESERVED, (address_port_to_binary(AP))/binary>>)
+  catch _:Reason -> {error, Reason} end.
 
-send_auth_method_selection_reply(Socket, Mathod) when is_atom(Method) ->
-  ok.
+send_auth_method_selection_reply(Socket, Method) when is_atom(Method) ->
+  try gen_tcp:send(Socket, <<?VERSION_SOCKS5, (auth_method(Method)):8>>)
+  catch _:Reason -> {error, Reason} end.
 
 send_auth_method_selection_reject(Socket) ->
-  ok.
+  send_auth_method_selection_reply(Socket, no_acceptable_methods).
 
 recv_auth_method_selection_request(Socket) ->
   try
     {ok, <<?VERSION_SOCKS5, NMethods>>} = gen_tcp:recv(Socket, 2, ?RECV_TIMEOUT_MS),
     {ok, Methods} = gen_tcp:recv(Socket, NMethods, ?RECV_TIMEOUT_MS),
     {ok, lists:usort([auth_method(M) || <<M>> <= Methods])}
-  catch _:Reason -> {error, Reason}
-  end.
+  catch _:Reason -> {error, Reason} end.
 
 -spec recv_reply(gen_tcp:socket()) -> {ok, {reply_code(), address_and_port()}} | {error, Reason :: any()}.
 %% @doc receives socks5 reply from given passive socket. throw-safe.
 recv_reply(Socket) ->
   try
     {ok, <<?VERSION_SOCKS5, ReplyCode, ?RESERVED, AType>>} = gen_tcp:recv(Socket, 4, ?RECV_TIMEOUT_MS),
-    {ok, {reply_code(ReplyCode), recv_address_port(Socket, AType)}}
-  catch _:Reason -> {error, Reason}
-  end.
+    {ok, AP} = recv_address_port(Socket, AType),
+    {ok, {reply_code(ReplyCode), AP}}
+  catch _:Reason -> {error, Reason} end.
 
 recv_request(Socket) ->
-  {ok, request_code, {address, port}}.
+  try
+    {ok, <<?VERSION_SOCKS5, Command, ?RESERVED, AType>>} = gen_tcp:recv(Socket, 4, ?RECV_TIMEOUT_MS),
+    {ok, AP} = recv_address_port(Socket, AType),
+    {ok, {command(Command), AP}}
+  catch _:Reason -> {error, Reason} end.
 
 -spec recv_address_port(gen_tcp:socket(), byte()) -> {ok, address_and_port()} | {error, invalid_addess_type}.
 %% @doc receives socks5 address and port from given passive socket.
@@ -176,8 +183,7 @@ recv_address_port(Socket, Type) ->
     {ok, Address} ->
       {ok, <<Port:16>>} = gen_tcp:recv(Socket, 2, ?RECV_TIMEOUT_MS),
       {ok, {Address, Port}};
-    {error, _Reason} ->
-      {error, invalid_address_type}
+    {error, _Reason} -> {error, invalid_address_type}
   end.
 
 -spec recv_address(gen_tcp:socket(), byte()) -> {ok, inet:ip_address() | string()} | {error, Reason :: any()}.
@@ -192,7 +198,8 @@ recv_address(Socket, ?ADDRESS_TYPE_IPV6) ->
 
 recv_address(Socket, ?ADDRESS_TYPE_DOMAIN_NAME) ->
   {ok, <<Len>>} = gen_tcp:recv(Socket, 1, ?RECV_TIMEOUT_MS),
-  {ok, _Name} = gen_tcp:recv(Socket, Len, ?RECV_TIMEOUT_MS);
+  {ok, Name} = gen_tcp:recv(Socket, Len, ?RECV_TIMEOUT_MS),
+  {ok, binary_to_list(Name)};
 
 recv_address(_Socket, _) ->
   {error, invalid_address_type}.
@@ -215,6 +222,5 @@ recv_udp_datagram(Socket) ->
         <<IPv6Addr:(8 * 16), Port:16, OriginalData/binary>> = Rest,
         {ok, {RelayAddress, RelayPort}, {IPv6Addr, Port}, Fragment, OriginalData}
     end
-  catch Reason -> {error, Reason}
-  end.
+  catch Reason -> {error, Reason} end.
 

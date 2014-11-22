@@ -25,14 +25,14 @@ main([AddressPort]) when is_list(AddressPort) ->
   {Address, Port} = parse_args(AddressPort),
   ?DEBUG("connecting to ~p", [AddressPort]),
 %%   test_connect(Address, Port, {0,0,0,0,0,0,0,1}, 17332),
-%%   test_connect(Address, Port, {127,0,0,1}, 17333),
+%%   test_connect(Address, Port, {127, 0, 0, 1}, 17333),
 %%   test_connect(Address, Port, "localhost", 17333),
 %%   test_bind(Address, Port, {127,0,0,1}, 100),
 %%   test_bind(Address, Port, {0,0,0,0,0,0,0,1}, 101),
-%%   test_bind(Address, Port, "localhost", 101),
-%%   test_udp_associate(Address, Port, {127, 0, 0, 1}, 17334),
+%%   test_bind(Address, Port, "localhost", 101).
+  test_udp_associate(Address, Port, {127, 0, 0, 1}, 17334).
 %%   test_udp_associate(Address, Port, {0,0,0,0,0,0,0,1}, 17335),
-  test_udp_associate(Address, Port, "localhost", 17336).
+%%   test_udp_associate(Address, Port, "localhost", 17336).
 
 test_connect(Address, Port, DestAddress, DestPort) ->
   Socket = negotiate_auth_method(Address, Port),
@@ -114,16 +114,16 @@ negotiate_auth_method(Address, Port) ->
   Socket.
 
 request_proxy(Socket, Type, {DestAddr, DestPort}) ->
-  ?DEBUG("=== " ++ pp(Type) ++" method test (" ++ pp(DestAddr) ++ ")", []),
+  ?DEBUG("=== ~s method test (~s)", [pp(Type), pp(DestAddr)]),
   Request = socks5:request(Type, {DestAddr, DestPort}),
-  ?DEBUG("SENDING: request: ~p, " ++ pp_address(DestAddr) ++ ":~p)", [Type, DestPort]),
+  ?DEBUG("SENDING: request: ~p, ~s:~p)", [Type, pp_address(DestAddr), DestPort]),
   gen_tcp:send(Socket, Request),
   {ok, Reply} = socks5:recv_reply(Socket),
   ?DEBUG("RECVED : reply  : ~p", [Reply]),
   Reply.
 
-pp(connect) ->       "      CONNECT";
-pp(bind) ->          "         BIND";
+pp(connect) -> "      CONNECT";
+pp(bind) -> "         BIND";
 pp(udp_associate) -> "UDP ASSOCIATE";
 pp(Address) when is_list(Address) -> "domain name";
 pp(Address) when is_tuple(Address) -> case tuple_size(Address) of 4 -> "IPv4"; 8 -> "IPv6" end.
