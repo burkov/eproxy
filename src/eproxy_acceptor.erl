@@ -3,6 +3,9 @@
 
 -behaviour(gen_server).
 
+%%% This actor listens to 1080 port, accepts incoming connection which are to be proxified
+%%% and deligates their serving to client actor(s)
+
 -export([
   start_link/0,
   init/1,
@@ -36,14 +39,6 @@ init([]) ->
   self() ! accept,
   {ok, #state{socket = Socket}}.
 
-handle_call(Request, _From, State) ->
-  lager:warning("unexpected call ~p", [Request]),
-  {reply, {error, unsupported}, State}.
-
-handle_cast(Request, State) ->
-  lager:warning("unexpected cast ~p", [Request]),
-  {noreply, State}.
-
 handle_info(accept, #state{socket = Socket} = State) ->
   case gen_tcp:accept(Socket, ?ACCEPT_TIMEOUT_MS) of
     {ok, ClientSocket} ->
@@ -64,18 +59,18 @@ handle_info(accept, #state{socket = Socket} = State) ->
   self() ! accept,
   {noreply, State};
 
-handle_info(Info, State) ->
-  lager:warning("unexpected info ~p", [Info]),
-  {noreply, State}.
-
+handle_info(Info, State) -> {stop, {unsupported_info, Info}, State}.
+handle_call(Request, From, State) -> {stop, {unsupported_call, From, Request}, State}.
+handle_cast(Request, State) -> {stop, {unsupported_cast, Request}, State}.
 terminate(Reason, _State) -> lager:warning("termination, reason:~p", [Reason]).
 code_change(_OldVsn, State, _Extra) -> {ok, State}.
 
--spec opened_tcp_ports_owners() -> [pid()].
+-spec opened_inet_ports_owners() -> [pid()].
 %% @doc returns list of all node's TCP socket owners
-opened_tcp_ports_owners() ->
+opened_inet_ports_owners() ->
   PortInfos = [erlang:port_info(P) || P <- erlang:ports()],
-  TcpPortInfos = [P || P <- PortInfos, proplists:get_value(name, P) =:= "tcp_inet"],
+  TcpPortInfos = [P || P <- PortInfos,
+    (proplists:get_value(name, P) =:= "tcp_inet" orelse proplists:get_value(name, P) =:= "udp_inet")],
   lists:flatten([proplists:get_value(links, P) || P <- TcpPortInfos]).
 
 -spec print_port_owners_on_change() -> ok.
@@ -83,7 +78,7 @@ opened_tcp_ports_owners() ->
 print_port_owners_on_change() ->
   %% process dictionary used here only for debug purposes
   OldOwners = get(owners),
-  Owners = opened_tcp_ports_owners(),
+  Owners = opened_inet_ports_owners(),
   Count = length(Owners),
   Delta = Count - length(OldOwners),
   put(owners, Owners),

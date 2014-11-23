@@ -8,6 +8,8 @@
   get_auth_methods/0,
   get_external_ipv4/0,
   get_external_ipv6/0,
+  get_internal_ipv4/0,
+  get_internal_ipv6/0,
   start_link/0,
   init/1,
   handle_call/3,
@@ -23,6 +25,8 @@
 
 -record(state, {
   port_number :: inet:port_number(),
+  internal_ipv4 = {127, 0, 0, 1} :: inet:ip4_address(),
+  internal_ipv6 = {0, 0, 0, 0, 0, 0, 0, 1} :: inet:ip6_address(),
   external_ipv4 = {127, 0, 0, 1} :: inet:ip4_address(),
   external_ipv6 = {0, 0, 0, 0, 0, 0, 0, 1} :: inet:ip6_address(),
   auth_methods = sets:from_list([no_auth]) :: sets:set(auth_method())
@@ -40,6 +44,12 @@ get_external_ipv4() -> gen_server:call(?SERVER, get_external_ipv4).
 -spec get_external_ipv6() -> inet:ip6_address().
 get_external_ipv6() -> gen_server:call(?SERVER, get_external_ipv6).
 
+-spec get_internal_ipv4() -> inet:ip4_address().
+get_internal_ipv4() -> gen_server:call(?SERVER, get_internal_ipv4).
+
+-spec get_internal_ipv6() -> inet:ip6_address().
+get_internal_ipv6() -> gen_server:call(?SERVER, get_internal_ipv6).
+
 %%%
 
 start_link() -> gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -51,6 +61,8 @@ handle_call(get_server_port_number, _From, State) -> {reply, State#state.port_nu
 handle_call(get_auth_methods, _From, State) -> {reply, State#state.auth_methods, State};
 handle_call(get_external_ipv4, _From, State) -> {reply, State#state.external_ipv4, State};
 handle_call(get_external_ipv6, _From, State) -> {reply, State#state.external_ipv6, State};
+handle_call(get_internal_ipv4, _From, State) -> {reply, State#state.internal_ipv4, State};
+handle_call(get_internal_ipv6, _From, State) -> {reply, State#state.internal_ipv6, State};
 handle_call(Request, From, State) -> {stop, {unsupported_call, From, Request}, State}.
 
 handle_cast(init, State) ->

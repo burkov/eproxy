@@ -190,11 +190,11 @@ recv_address_port(Socket, Type) ->
 %% @doc receives socks5 address from given passive socket.
 recv_address(Socket, ?ADDRESS_TYPE_IPV4) ->
   {ok, A} = gen_tcp:recv(Socket, 4, ?RECV_TIMEOUT_MS),
-  {ok, list_to_tuple(binary_to_list(A))};
+  {ok, binary_to_ip4_address(A)};
 
 recv_address(Socket, ?ADDRESS_TYPE_IPV6) ->
   {ok, A} = gen_tcp:recv(Socket, 16, ?RECV_TIMEOUT_MS),
-  {ok, list_to_tuple([X || <<X:16>> <= A])};
+  {ok, binary_to_ip6_address(A)};
 
 recv_address(Socket, ?ADDRESS_TYPE_DOMAIN_NAME) ->
   {ok, <<Len>>} = gen_tcp:recv(Socket, 1, ?RECV_TIMEOUT_MS),
@@ -207,20 +207,28 @@ recv_address(_Socket, _) ->
 -spec recv_udp_datagram(gen_tcp:socket()) ->
   {ok, Relay :: address_and_port(), Source :: address_and_port(), FragmentNo :: fragment_no(), Data :: binary()} | {error, Reason :: any()}.
 %% @doc receives socks5 udp datagram from given passive socket. throw-safe.
-recv_udp_datagram(Socket) ->
+recv_udp_datagram(Socket) -> recv_udp_datagram(Socket, infinity).
+
+recv_udp_datagram(Socket, Timeout) ->
   try
-    {ok, {RelayAddress, RelayPort, <<?RESERVED:16, Fragment:8, AType:8, Rest/binary>>}} = gen_udp:recv(Socket, 0, ?RECV_TIMEOUT_MS),
+    {ok, {RelayAddress, RelayPort, <<?RESERVED:16, Fragment:8, AType:8, Rest/binary>>}} = gen_udp:recv(Socket, 0, Timeout),
     case AType of
       ?ADDRESS_TYPE_DOMAIN_NAME ->
         <<Len:8, Rest2/binary>> = Rest,
-        <<Name:Len, Port:16, OriginalData/binary>> = Rest2,
-        {ok, {RelayAddress, RelayPort}, {Name, Port}, Fragment, OriginalData};
+        <<Name:Len/binary, Port:16, OriginalData/binary>> = Rest2,
+        {ok, {RelayAddress, RelayPort}, {binary_to_list(Name), Port}, Fragment, OriginalData};
       ?ADDRESS_TYPE_IPV4 ->
-        <<IPv4Addr:32, Port:16, OriginalData/binary>> = Rest,
-        {ok, {RelayAddress, RelayPort}, {IPv4Addr, Port}, Fragment, OriginalData};
+        <<IPv4Addr:4/binary, Port:16, OriginalData/binary>> = Rest,
+        {ok, {RelayAddress, RelayPort}, {binary_to_ip4_address(IPv4Addr), Port}, Fragment, OriginalData};
       ?ADDRESS_TYPE_IPV6 ->
-        <<IPv6Addr:(8 * 16), Port:16, OriginalData/binary>> = Rest,
-        {ok, {RelayAddress, RelayPort}, {IPv6Addr, Port}, Fragment, OriginalData}
+        <<IPv6Addr:16/binary, Port:16, OriginalData/binary>> = Rest,
+        {ok, {RelayAddress, RelayPort}, {binary_to_ip6_address(IPv6Addr), Port}, Fragment, OriginalData}
     end
   catch Reason -> {error, Reason} end.
 
+
+binary_to_ip4_address(Binary) when is_binary(Binary) ->
+  list_to_tuple(binary_to_list(Binary)).
+
+binary_to_ip6_address(Binary) when is_binary(Binary) ->
+  list_to_tuple([X || <<X:16>> <= Binary]).
