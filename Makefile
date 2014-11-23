@@ -1,9 +1,12 @@
 default: compile
 
-.PHONY: compile test
+.PHONY: compile test clean dialyze dante 1080
 
-compile:
+compile: deps
 	rebar compile
+
+deps:
+	rebar get-deps
 
 clean:
 	rebar clean
