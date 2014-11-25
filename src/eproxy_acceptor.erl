@@ -90,7 +90,7 @@ print_port_owners_on_change() ->
   end.
 
 -spec pp_delta(integer()) -> string().
-%% @doc pretty-printer for non-zero integers' delta. adds '+' sign in front of positive deltas.
-pp_delta(0) -> exit(bad_arg);
+%% @doc pretty-printer for integers' delta. adds '+' sign in front of positive deltas.
+pp_delta(0) -> " 0";
 pp_delta(X) when X < 0 -> io_lib:format("~w", [X]);
 pp_delta(X) when X > 0 -> io_lib:format("+~w", [X]).
