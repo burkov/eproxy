@@ -44,7 +44,7 @@ handle_info(accept, #state{socket = Socket} = State) ->
     {ok, ClientSocket} ->
       try
         {ok, Pid} = eproxy_client_sup:serve_client(ClientSocket),
-        gen_tcp:controlling_process(ClientSocket, Pid) % erlang will close it if process crashes
+        ok = gen_tcp:controlling_process(ClientSocket, Pid) % erlang will close it if process crashes
       catch Type:Reason ->
         lager:warning("failed to spawn worker for ~p, got ~p with reason: ~p", [inet:peername(ClientSocket), Type, Reason]),
         gen_tcp:close(ClientSocket)
